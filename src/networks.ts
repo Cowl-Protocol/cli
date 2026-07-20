@@ -22,15 +22,16 @@ export type NetworkDef = {
 
 // Robinhood Chain is an Arbitrum-based L2. Its public testnet (chainId 46630) went
 // live Feb 2026 and mainnet (chainId 4663) on Jul 1 2026, so Cowl targets the real
-// Robinhood Chain testnet by default. Arbitrum Sepolia stays available as a fallback.
-// Override any RPC or contract address via `cowl config set`.
-// Public RPC alternative if the official endpoint is unreachable: https://46630.rpc.thirdweb.com
+// Robinhood Chain testnet by default. The official RPC
+// (https://rpc.testnet.chain.robinhood.com/rpc) is not reachable from every region,
+// so the default uses a globally-reachable public endpoint; swap it any time with
+// `cowl config set rpcUrl <url>`. Arbitrum Sepolia stays available as a fallback.
 export const NETWORKS: Record<string, NetworkDef> = {
   "robinhood-testnet": {
     key: "robinhood-testnet",
     label: "Robinhood Chain Testnet",
     chainId: 46630,
-    rpcUrl: "https://rpc.testnet.chain.robinhood.com/rpc",
+    rpcUrl: "https://46630.rpc.thirdweb.com",
     explorer: "https://explorer.testnet.chain.robinhood.com",
     currency: { name: "Ether", symbol: "ETH", decimals: 18 },
     testnet: true,
