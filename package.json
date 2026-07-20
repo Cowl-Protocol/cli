@@ -1,0 +1,60 @@
+{
+  "name": "@cowlprotocol/cli",
+  "version": "0.1.0",
+  "description": "Cowl Protocol CLI — private trading on Robinhood Chain from your terminal. Shielded pool, private trades, stealth addresses, view keys, and gasless relayer.",
+  "type": "module",
+  "bin": {
+    "cowl": "./dist/cli.mjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "node ./build.mjs",
+    "dev": "node --enable-source-maps ./dist/cli.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "node ./build.mjs"
+  },
+  "keywords": [
+    "cowl",
+    "cowl-protocol",
+    "privacy",
+    "zk",
+    "shielded-pool",
+    "private-trading",
+    "stealth-address",
+    "view-key",
+    "robinhood-chain",
+    "arbitrum",
+    "defi",
+    "cli"
+  ],
+  "author": "Cowl Protocol",
+  "license": "MIT",
+  "homepage": "https://cowlprotocol.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Cowl-Protocol/cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Cowl-Protocol/cli/issues"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.7.0",
+    "@noble/curves": "^1.4.0",
+    "@noble/hashes": "^1.4.0",
+    "commander": "^12.1.0",
+    "picocolors": "^1.0.1",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.5.0"
+  }
+}
