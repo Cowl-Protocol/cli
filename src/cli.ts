@@ -15,7 +15,7 @@ import {
   die,
   symbols,
 } from "./ui.js";
-import { COWL_DIR, CONFIG_PATH } from "./paths.js";
+import { COWL_DIR, CONFIG_PATH, displayPath } from "./paths.js";
 import { loadConfig, saveConfig, activeNetwork, setConfigValue, type Config } from "./config.js";
 import { NETWORKS, type NetworkDef, type CowlContracts } from "./networks.js";
 import {
@@ -36,6 +36,12 @@ import {
 import { deriveMetaKeys, generateStealthAddress } from "./stealth.js";
 import { createViewKey, readViewKey, viewKeyExists } from "./viewkey.js";
 import { FEES, FEE_SPLIT } from "./fees.js";
+import { logo } from "./logo.js";
+
+/** The wordmark needs ~35 columns; fall back to the compact banner when narrow. */
+function splash(): string {
+  return (process.stdout.columns ?? 0) >= 38 ? logo() : banner();
+}
 
 const VERSION = "0.1.2";
 
@@ -113,7 +119,7 @@ program
   .description("set up your wallet, view key, and network")
   .option("--force", "overwrite an existing wallet")
   .action(async (opts: { force?: boolean }) => {
-    console.log(banner());
+    console.log(splash());
     p.intro(acid("Set up Cowl"));
 
     if (keystoreExists() && !opts.force) {
@@ -165,7 +171,7 @@ program
     p.outro(`${symbols.ok()} ${bold("Ready.")}`);
     row("Address", acid(address));
     row("Network", bone(NETWORKS[netKey]!.label));
-    row("Stored in", muted(COWL_DIR));
+    row("Stored in", muted(displayPath(COWL_DIR)));
     console.log(`\n  ${muted("Next:")} ${dim("cowl balance")} ${muted("·")} ${dim("cowl address")} ${muted("·")} ${dim("cowl fees")}`);
   });
 
@@ -432,6 +438,15 @@ program
       s?.stop("unreachable");
       die((e as Error).message);
     }
+  });
+
+// ---- logo -------------------------------------------------------------------
+
+program
+  .command("logo")
+  .description("print the Cowl logo")
+  .action(() => {
+    console.log(logo());
   });
 
 // ---- send (real transfer) ---------------------------------------------------
