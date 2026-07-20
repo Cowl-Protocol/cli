@@ -20,10 +20,32 @@ export type NetworkDef = {
   contracts: CowlContracts;
 };
 
-// Robinhood Chain is an Arbitrum-based L2. Until its public testnet details ship,
-// Arbitrum Sepolia is the working default so reads and connectivity are real today.
+// Robinhood Chain is an Arbitrum-based L2. Its public testnet (chainId 46630) went
+// live Feb 2026 and mainnet (chainId 4663) on Jul 1 2026, so Cowl targets the real
+// Robinhood Chain testnet by default. Arbitrum Sepolia stays available as a fallback.
 // Override any RPC or contract address via `cowl config set`.
+// Public RPC alternative if the official endpoint is unreachable: https://46630.rpc.thirdweb.com
 export const NETWORKS: Record<string, NetworkDef> = {
+  "robinhood-testnet": {
+    key: "robinhood-testnet",
+    label: "Robinhood Chain Testnet",
+    chainId: 46630,
+    rpcUrl: "https://rpc.testnet.chain.robinhood.com/rpc",
+    explorer: "https://explorer.testnet.chain.robinhood.com",
+    currency: { name: "Ether", symbol: "ETH", decimals: 18 },
+    testnet: true,
+    contracts: {},
+  },
+  "robinhood-mainnet": {
+    key: "robinhood-mainnet",
+    label: "Robinhood Chain",
+    chainId: 4663,
+    rpcUrl: "https://rpc.mainnet.chain.robinhood.com",
+    explorer: "https://robinhoodchain.blockscout.com",
+    currency: { name: "Ether", symbol: "ETH", decimals: 18 },
+    testnet: false,
+    contracts: {},
+  },
   "arbitrum-sepolia": {
     key: "arbitrum-sepolia",
     label: "Arbitrum Sepolia",
@@ -34,19 +56,9 @@ export const NETWORKS: Record<string, NetworkDef> = {
     testnet: true,
     contracts: {},
   },
-  "robinhood-testnet": {
-    key: "robinhood-testnet",
-    label: "Robinhood Chain Testnet",
-    chainId: 0, // set once public: `cowl config set network.chainId <id>`
-    rpcUrl: "", // set once public: `cowl config set network.rpcUrl <url>`
-    explorer: "",
-    currency: { name: "Ether", symbol: "ETH", decimals: 18 },
-    testnet: true,
-    contracts: {},
-  },
 };
 
-export const DEFAULT_NETWORK = "arbitrum-sepolia";
+export const DEFAULT_NETWORK = "robinhood-testnet";
 
 /** Build a viem Chain object from a network definition. */
 export function toViemChain(net: NetworkDef): Chain {
