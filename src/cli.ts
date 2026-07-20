@@ -37,7 +37,7 @@ import { deriveMetaKeys, generateStealthAddress } from "./stealth.js";
 import { createViewKey, readViewKey, viewKeyExists } from "./viewkey.js";
 import { FEES, FEE_SPLIT } from "./fees.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.1";
 
 const program = new Command();
 program
