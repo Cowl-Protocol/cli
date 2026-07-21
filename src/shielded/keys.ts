@@ -7,11 +7,21 @@
 //
 // A separate secp256k1 view key (shared with the stealth module) encrypts notes to
 // a recipient and lets them scan the pool for what is theirs.
-import { hexToBytes } from "@noble/hashes/utils";
-import { deriveMetaKeys } from "../stealth.js";
+import { secp256k1 } from "@noble/curves/secp256k1";
+import { keccak_256 } from "@noble/hashes/sha3";
+import { bytesToHex, hexToBytes, concatBytes } from "@noble/hashes/utils";
 import { hashToField, poseidon, fieldToHex, hexToField } from "./field.js";
 
+const Point = secp256k1.ProjectivePoint;
+const CURVE_N = secp256k1.CURVE.n;
+
 const utf8 = (s: string) => new TextEncoder().encode(s);
+
+/** Reduce bytes into a secp256k1 scalar. Note this is the curve order, not Fr. */
+function toCurveScalar(bytes: Uint8Array): bigint {
+  const s = BigInt("0x" + bytesToHex(bytes)) % CURVE_N;
+  return s === 0n ? 1n : s;
+}
 
 export type ShieldedKeys = {
   sk: bigint; // spending key (secret)
@@ -28,16 +38,19 @@ export function deriveShieldedKeys(privateKeyHex: string): ShieldedKeys {
   const nk = poseidon([sk]);
   const mpk = poseidon([sk, nk]);
 
-  // Reuse the stealth secp256k1 view key so there is one canonical scanning key.
-  const meta = deriveMetaKeys(privateKeyHex);
+  // A view key of its own, under a separate domain. Sharing the stealth view key
+  // would make a published stealth meta-address and a published payment address
+  // carry the same trailing bytes, letting anyone tie the two together.
+  const viewPriv = toCurveScalar(keccak_256(concatBytes(pk, utf8("cowl:shielded:view"))));
+  const viewPubHex = bytesToHex(Point.BASE.multiply(viewPriv).toRawBytes(true));
 
   return {
     sk,
     nk,
     mpk,
-    viewPriv: meta.viewPriv,
-    viewPubHex: meta.viewPubHex,
-    paymentAddress: encodePaymentAddress(mpk, meta.viewPubHex),
+    viewPriv,
+    viewPubHex,
+    paymentAddress: encodePaymentAddress(mpk, viewPubHex),
   };
 }
 
