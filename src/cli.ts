@@ -1321,7 +1321,48 @@ program
 
 // ---- default: bare `cowl` shows status --------------------------------------
 
-program.action(() => runStatus());
+/** Levenshtein distance, used to suggest the command someone meant to type. */
+function editDistance(a: string, b: string): number {
+  const rows = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 0; j <= b.length; j++) rows[0]![j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      rows[i]![j] = Math.min(rows[i - 1]![j]! + 1, rows[i]![j - 1]! + 1, rows[i - 1]![j - 1]! + cost);
+    }
+  }
+  return rows[a.length]![b.length]!;
+}
+
+function closestCommand(input: string): string | null {
+  let best: string | null = null;
+  let bestDistance = Infinity;
+  for (const name of program.commands.map((c) => c.name())) {
+    const d = editDistance(input.toLowerCase(), name.toLowerCase());
+    if (d < bestDistance) {
+      bestDistance = d;
+      best = name;
+    }
+  }
+  // Only suggest a genuine typo: one edit away, or two when it starts the same.
+  if (!best) return null;
+  const sameStart = best[0]?.toLowerCase() === input[0]?.toLowerCase();
+  return bestDistance <= 1 || (bestDistance === 2 && sameStart) ? best : null;
+}
+
+// Commander routes anything it does not recognise here, so an unknown command
+// must be rejected rather than quietly falling through to the status overview.
+program.action(() => {
+  const [unknown] = program.args;
+  if (unknown) {
+    const guess = closestCommand(unknown);
+    die(
+      `Unknown command "${unknown}".`,
+      guess ? `Did you mean "cowl ${guess}"? Run cowl --help for everything.` : "Run cowl --help to see every command.",
+    );
+  }
+  runStatus();
+});
 
 // ---- run --------------------------------------------------------------------
 
