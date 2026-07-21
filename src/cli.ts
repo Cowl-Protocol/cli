@@ -115,6 +115,14 @@ function askPassphrase(message = "Keystore passphrase"): Promise<string> {
   // Non-interactive escape hatch for scripting/CI. Never echoed.
   const env = process.env.COWL_PASSPHRASE;
   if (env) return Promise.resolve(env);
+  // --json is machine mode. Prompts render to stdout, so asking here would land
+  // inside the JSON and break anything reading the output.
+  if (program.opts<{ json?: boolean }>().json) {
+    die(
+      "This command needs your passphrase, and --json cannot prompt for one.",
+      "Provide it in the environment: COWL_PASSPHRASE=… cowl … --json",
+    );
+  }
   return p.password({ message }).then(unwrap);
 }
 
