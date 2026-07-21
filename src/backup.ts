@@ -7,7 +7,7 @@
 // passphrase (scrypt + AES-256-GCM) so a backup is safe to keep off the machine.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes, scryptSync, createCipheriv, createDecipheriv } from "node:crypto";
-import { CONFIG_PATH, KEYSTORE_PATH, VIEWKEY_PATH, ensureHome } from "./paths.js";
+import { CONFIG_PATH, KEYSTORE_PATH, VIEWKEY_PATH, ensureHome, displayPath } from "./paths.js";
 
 const SCRYPT_N = 1 << 15;
 
@@ -80,7 +80,7 @@ export function createBackup(path: string, passphrase: string, nowIso: string): 
 }
 
 function openBackup(path: string, passphrase: string): { file: BackupFile; payload: Payload } {
-  if (!existsSync(path)) throw new Error(`No backup at ${path}`);
+  if (!existsSync(path)) throw new Error(`No backup at ${displayPath(path)}`);
   let file: BackupFile;
   try {
     file = JSON.parse(readFileSync(path, "utf8")) as BackupFile;

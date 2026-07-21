@@ -455,14 +455,14 @@ program
 
     try {
       const info = createBackup(path, pass, new Date().toISOString());
-      ok(`Backup written to ${bone(path)}`);
+      ok(`Backup written to ${bone(displayPath(path))}`);
       row("Address", acid(info.address ?? dim("unknown")));
       row("View key", info.hasViewKey ? `${symbols.ok()} ${muted("included")}` : dim("none on this machine"));
       row("Config", info.hasConfig ? `${symbols.ok()} ${muted("included")}` : dim("none"));
       console.log(
         `\n  ${muted("Shielded notes are left out on purpose — every note key descends from your wallet key, so")} ${dim("cowl scan")} ${muted("rebuilds them.")}`,
       );
-      console.log(`  ${muted("Verify it before you trust it:")} ${dim(`cowl backup --verify ${path}`)}`);
+      console.log(`  ${muted("Verify it before you trust it:")} ${dim(`cowl backup --verify ${displayPath(path)}`)}`);
     } catch (e) {
       die((e as Error).message);
     }
@@ -486,7 +486,7 @@ program
     try {
       const info = restoreBackup(path, pass);
       ok(`Restored ${acid(info.address ?? "wallet")}`);
-      row("From", muted(path));
+      row("From", muted(displayPath(path)));
       row("Created", muted(info.createdAt));
       console.log(`\n  ${muted("Rebuild your shielded notes:")} ${dim("cowl scan")}`);
     } catch (e) {
