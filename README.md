@@ -304,10 +304,24 @@ the machine. Verify a backup before you rely on it: one that has never been rest
 
 ---
 
+## Testing
+
+`cowl` is tested by hand against the live Robinhood Chain testnet, and the results are written down
+instead of summarised. [TESTING.md](./TESTING.md) is that log: 74 checks across eight groups, every
+issue they turned up, and what closed each one. Two tests are still marked partial, and it says so.
+
+Two of the issues are worth reading even if you never install this. One had a stealth meta-address
+and a shielded payment address ending in the same bytes, so anyone holding both published addresses
+could tie them to one person. The other let you sign an ERC-20 transfer whose confirmation screen
+read `Amount 1 tokens`, without ever naming what was leaving your wallet.
+
+---
+
 ## Links
 
 - [Cowl Protocol](https://cowlprotocol.com) — website
 - [Docs](https://cowlprotocol.com/docs)
+- [Test log](./TESTING.md) — every check, run by hand on testnet
 - [GitHub](https://github.com/Cowl-Protocol)
 
 ## License
