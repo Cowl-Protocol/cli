@@ -15,7 +15,10 @@ import {
   die,
   symbols,
 } from "./ui.js";
-import { COWL_DIR, CONFIG_PATH, displayPath } from "./paths.js";
+import { statSync } from "node:fs";
+import { COWL_DIR, CONFIG_PATH, KEYSTORE_PATH, VIEWKEY_PATH, displayPath } from "./paths.js";
+import { createBackup, verifyBackup, restoreBackup } from "./backup.js";
+import { passphraseStrength } from "./strength.js";
 import {
   loadConfig,
   saveConfig,
@@ -33,6 +36,7 @@ import {
   createKeystore,
   importKeystore,
   exportPrivateKey,
+  changePassphrase,
 } from "./keystore.js";
 import {
   nativeBalance,
@@ -117,6 +121,22 @@ function out(json: boolean, obj: unknown, human: () => void) {
   else human();
 }
 
+/** Ask for a new passphrase and push back on weak ones before they seal anything. */
+async function askNewPassphrase(message: string): Promise<string> {
+  const pass = await askPassphrase(message);
+  const s = passphraseStrength(pass);
+  if (s.level !== "strong") {
+    warn(`That passphrase looks ${s.level}.`);
+    if (s.hint) console.log(`  ${muted(s.hint)}`);
+    console.log(`  ${muted("A stolen keystore is attacked offline, where short passphrases fall fast.")}`);
+    if (!process.env.COWL_PASSPHRASE) {
+      const go = unwrap(await p.confirm({ message: "Use it anyway?", initialValue: false }));
+      if (!go) die("Cancelled.", "Nothing was written.");
+    }
+  }
+  return pass;
+}
+
 /** Unlock the wallet and derive the shielded-pool keys. */
 async function shieldedKeys(): Promise<ShieldedKeys> {
   requireWallet();
@@ -182,7 +202,7 @@ program
       pk = unwrap(await p.text({ message: "Private key (0x…)", validate: (v) => (/^0x?[0-9a-fA-F]{64}$/.test(v.trim()) ? undefined : "Need a 32-byte hex key.") }));
     }
 
-    const pass = await askPassphrase("Choose a passphrase (encrypts your key)");
+    const pass = await askNewPassphrase("Choose a passphrase (encrypts your key)");
     const pass2 = await askPassphrase("Confirm passphrase");
     if (pass !== pass2) die("Passphrases do not match.");
 
@@ -224,7 +244,7 @@ wallet
   .option("--force", "overwrite an existing wallet")
   .action(async (opts: { force?: boolean }) => {
     if (keystoreExists() && !opts.force) die("A wallet already exists.", "Overwrite: cowl wallet new --force");
-    const pass = await askPassphrase("Choose a passphrase");
+    const pass = await askNewPassphrase("Choose a passphrase");
     const pass2 = await askPassphrase("Confirm passphrase");
     if (pass !== pass2) die("Passphrases do not match.");
     const address = createKeystore(pass);
@@ -239,7 +259,7 @@ wallet
   .action(async (pkArg: string | undefined, opts: { force?: boolean }) => {
     if (keystoreExists() && !opts.force) die("A wallet already exists.", "Overwrite: cowl wallet import --force");
     const pk = pkArg ?? (unwrap(await p.text({ message: "Private key (0x…)" })));
-    const pass = await askPassphrase("Choose a passphrase");
+    const pass = await askNewPassphrase("Choose a passphrase");
     const address = importKeystore(pk, pass);
     ok(`Imported: ${acid(address)}`);
   });
@@ -259,12 +279,166 @@ wallet
   .action(async () => {
     requireWallet();
     warn("This prints your private key in plaintext.");
+    console.log(`  ${muted("Not while screen sharing or recording. Once it is captured, treat the wallet as burned.")}`);
     const go = unwrap(await p.confirm({ message: "Continue?", initialValue: false }));
     if (!go) return;
     const pass = await askPassphrase();
     const pk = exportPrivateKey(pass);
     console.log(`\n  ${bold(pk)}\n`);
     warn("Anyone with this key controls your funds. Never share it.");
+    console.log(`  ${muted("Prefer")} ${dim("cowl backup <path>")} ${muted("— it stays encrypted at rest.")}`);
+  });
+
+wallet
+  .command("passphrase")
+  .description("change the passphrase protecting your keystore")
+  .action(async () => {
+    requireWallet();
+    const current = await askPassphrase("Current passphrase");
+    const next = await askNewPassphrase("New passphrase");
+    const confirm = await askPassphrase("Confirm new passphrase");
+    if (next !== confirm) die("Passphrases do not match.", "Nothing was changed.");
+    try {
+      const address = changePassphrase(current, next);
+      ok(`Passphrase changed for ${acid(address)}`);
+      console.log(`  ${muted("Existing backups still use the old passphrase. Make a fresh one:")} ${dim("cowl backup <path>")}`);
+    } catch (e) {
+      die((e as Error).message);
+    }
+  });
+
+// ---- backup / restore -------------------------------------------------------
+
+program
+  .command("backup")
+  .description("write an encrypted backup of your wallet and view key")
+  .argument("<path>", "file to write, e.g. ~/cowl-backup.json")
+  .option("--verify", "check an existing backup instead of writing one")
+  .action(async (path: string, opts: { verify?: boolean }) => {
+    if (opts.verify) {
+      const pass = await askPassphrase("Backup passphrase");
+      try {
+        const info = verifyBackup(path, pass);
+        ok("Backup opens and is intact.");
+        row("Address", acid(info.address ?? dim("unknown")));
+        row("Created", muted(info.createdAt));
+        row("View key", info.hasViewKey ? `${symbols.ok()} ${muted("included")}` : dim("missing"));
+        row("Config", info.hasConfig ? `${symbols.ok()} ${muted("included")}` : dim("missing"));
+      } catch (e) {
+        die((e as Error).message);
+      }
+      return;
+    }
+
+    requireWallet();
+    console.log(`  ${muted("This backup is sealed under its own passphrase, separate from your keystore.")}`);
+    const pass = await askNewPassphrase("Passphrase for this backup");
+    const confirm = await askPassphrase("Confirm backup passphrase");
+    if (pass !== confirm) die("Passphrases do not match.", "Nothing was written.");
+
+    try {
+      const info = createBackup(path, pass, new Date().toISOString());
+      ok(`Backup written to ${bone(path)}`);
+      row("Address", acid(info.address ?? dim("unknown")));
+      row("View key", info.hasViewKey ? `${symbols.ok()} ${muted("included")}` : dim("none on this machine"));
+      row("Config", info.hasConfig ? `${symbols.ok()} ${muted("included")}` : dim("none"));
+      console.log(
+        `\n  ${muted("Shielded notes are left out on purpose — every note key descends from your wallet key, so")} ${dim("cowl scan")} ${muted("rebuilds them.")}`,
+      );
+      console.log(`  ${muted("Verify it before you trust it:")} ${dim(`cowl backup --verify ${path}`)}`);
+    } catch (e) {
+      die((e as Error).message);
+    }
+  });
+
+program
+  .command("restore")
+  .description("restore a wallet and view key from an encrypted backup")
+  .argument("<path>", "backup file")
+  .option("--force", "overwrite the wallet on this machine")
+  .action(async (path: string, opts: { force?: boolean }) => {
+    if (keystoreExists() && !opts.force) {
+      warn("A wallet already exists on this machine.");
+      const go = unwrap(await p.confirm({ message: "Overwrite it?", initialValue: false }));
+      if (!go) {
+        console.log(muted("  Kept your existing wallet."));
+        return;
+      }
+    }
+    const pass = await askPassphrase("Backup passphrase");
+    try {
+      const info = restoreBackup(path, pass);
+      ok(`Restored ${acid(info.address ?? "wallet")}`);
+      row("From", muted(path));
+      row("Created", muted(info.createdAt));
+      console.log(`\n  ${muted("Rebuild your shielded notes:")} ${dim("cowl scan")}`);
+    } catch (e) {
+      die((e as Error).message);
+    }
+  });
+
+// ---- doctor -----------------------------------------------------------------
+
+program
+  .command("doctor")
+  .description("check your local setup for security and configuration problems")
+  .action(() => {
+    const { json } = ctx();
+    type Check = { name: string; ok: boolean; detail: string };
+    const checks: Check[] = [];
+
+    const modeOf = (path: string): number | null => {
+      try {
+        return statSync(path).mode & 0o777;
+      } catch {
+        return null;
+      }
+    };
+
+    const dirMode = modeOf(COWL_DIR);
+    checks.push({
+      name: "Data directory",
+      ok: dirMode === 0o700,
+      detail: dirMode === null ? "missing" : dirMode === 0o700 ? "0700, private" : `${dirMode.toString(8)}, should be 0700`,
+    });
+
+    // Config is optional — defaults apply when it is absent. The keystore and the
+    // view key are not: the view key is random, so nothing can recompute it.
+    for (const [name, path, optional, missingHint] of [
+      ["Keystore", KEYSTORE_PATH, false, "none — run cowl init"],
+      ["View key", VIEWKEY_PATH, false, "none — run cowl viewkey new"],
+      ["Config", CONFIG_PATH, true, "not present, using defaults"],
+    ] as const) {
+      const mode = modeOf(path);
+      checks.push({
+        name,
+        ok: mode === null ? optional : mode === 0o600,
+        detail: mode === null ? missingHint : mode === 0o600 ? "0600, private" : `${mode.toString(8)}, should be 0600`,
+      });
+    }
+
+    checks.push({
+      name: "Wallet",
+      ok: keystoreExists(),
+      detail: keystoreExists() ? (keystoreAddress() ?? "unreadable") : "none — run cowl init",
+    });
+
+    if (json) {
+      console.log(JSON.stringify({ checks }, null, 2));
+      return;
+    }
+
+    heading("Doctor");
+    for (const c of checks) {
+      console.log(`  ${c.ok ? symbols.ok() : acid("!")} ${bone(c.name.padEnd(16))} ${muted(c.detail)}`);
+    }
+    const bad = checks.filter((c) => !c.ok);
+    console.log(
+      bad.length === 0
+        ? `\n  ${muted("Everything looks right.")}`
+        : `\n  ${muted(`${bad.length} thing${bad.length === 1 ? "" : "s"} to look at above.`)}`,
+    );
+    console.log(`  ${muted("Backed up lately?")} ${dim("cowl backup ~/cowl-backup.json")}`);
   });
 
 // ---- network ----------------------------------------------------------------

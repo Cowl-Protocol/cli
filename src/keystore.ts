@@ -102,6 +102,12 @@ export function unlockKeystore(passphrase: string): PrivateKeyAccount {
   return privateKeyToAccount(pk);
 }
 
+/** Re-encrypt the same key under a new passphrase. Throws if the old one is wrong. */
+export function changePassphrase(oldPass: string, newPass: string): `0x${string}` {
+  const privateKey = exportPrivateKey(oldPass);
+  return writeKeystore(privateKey, newPass);
+}
+
 /** Decrypt and return the raw private key (for `wallet export`). */
 export function exportPrivateKey(passphrase: string): `0x${string}` {
   const account = unlockKeystore(passphrase);

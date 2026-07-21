@@ -260,9 +260,30 @@ Environment overrides: `COWL_HOME` (data directory), `COWL_POOL_DIR` (shared poo
 
 ---
 
-## Security
+## Backup & security
 
-- Keys are encrypted at rest with a passphrase; the passphrase is never stored.
+Two things on your machine cannot be recomputed: the **keystore** (it is your wallet) and the
+**view key** (it is generated randomly). Shielded notes are not in that list — every note key
+descends from your wallet key, so `cowl scan` rebuilds them from the pool.
+
+```bash
+cowl backup ~/cowl-backup.json          # encrypted bundle: keystore + view key + config
+cowl backup --verify ~/cowl-backup.json # prove it opens before you trust it
+cowl restore ~/cowl-backup.json         # bring a wallet back on any machine
+
+cowl wallet passphrase                  # rotate the keystore passphrase
+cowl doctor                             # audit file permissions and setup
+cowl wallet export                      # reveal the raw private key (last resort)
+```
+
+The backup is sealed under its own passphrase with scrypt + AES-256-GCM, so it is safe to keep off
+the machine. Verify a backup before you rely on it: one that has never been restored is not a backup.
+
+- Keys are encrypted at rest with a passphrase; the passphrase is never stored, and there is no
+  recovery path if you forget it.
+- Weak passphrases are called out when chosen. A stolen keystore is attacked offline, where short
+  passphrases fall quickly.
+- Never run `cowl wallet export` while screen sharing or recording.
 - The CLI is non-custodial. You hold your keys; no server can move your funds.
 - This is testnet-first software. Do not point it at mainnet funds until the protocol is audited
   and live. See the [disclaimer](https://cowlprotocol.com/disclaimer).
