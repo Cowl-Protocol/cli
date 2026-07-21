@@ -935,10 +935,23 @@ program
     const isNative = token.toUpperCase() === net.currency.symbol.toUpperCase();
     if (!isNative && !isAddress(token)) die(`Unknown token "${token}".`, `Use ${net.currency.symbol} or an ERC-20 address.`);
 
+    // Name the token before asking anyone to sign. "1 tokens" cannot tell TSLA
+    // from AMZN, and this is the last screen before the transfer is irreversible.
+    let unit = net.currency.symbol;
+    if (!isNative) {
+      const s = p.spinner();
+      s.start("Reading token");
+      unit = await tokenMeta(net, token as Address).then(
+        (m) => m.symbol,
+        () => "tokens", // unreadable contract — say nothing rather than guess
+      );
+      s.stop(unit === "tokens" ? "Symbol unreadable" : unit);
+    }
+
     heading("Send");
     row("From", muted(address));
     row("To", bone(to));
-    row("Amount", `${bold(amount)} ${muted(isNative ? net.currency.symbol : "tokens")}`);
+    row("Amount", `${bold(amount)} ${muted(unit)}`);
     row("Network", muted(net.label));
 
     const go = unwrap(await p.confirm({ message: "Sign and broadcast?", initialValue: false }));
