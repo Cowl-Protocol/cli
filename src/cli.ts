@@ -47,6 +47,7 @@ import {
   nativeBalance,
   tokenBalance,
   tokenInfo,
+  tokenMeta,
   sendNative,
   sendToken,
   waitForReceipt,
@@ -782,7 +783,7 @@ program
 // ---- status (offline overview) ----------------------------------------------
 
 /** A fast, offline snapshot of your setup — no RPC calls. */
-function runStatus(): void {
+function runStatus(showSplash = false): void {
   const { net, json } = ctx();
   const addr = keystoreAddress();
   const vkey = readViewKey();
@@ -804,7 +805,7 @@ function runStatus(): void {
     return;
   }
 
-  console.log(splash());
+  if (showSplash) console.log(splash());
   heading(`Status · ${net.label}`);
   row("Wallet", addr ? acid(addr) : dim("not set up → cowl init"));
   row("View key", vkey ? `${symbols.ok()} ${muted(`created ${vkey.createdAt.slice(0, 10)}`)}` : dim("none → cowl viewkey new"));
@@ -829,7 +830,9 @@ function runStatus(): void {
 program
   .command("status")
   .description("show a quick overview of your wallet, network, and protocol status")
-  .action(runStatus);
+  // Wrapped: passing runStatus directly would receive Commander's options object
+  // as its first argument and read as a truthy showSplash.
+  .action(() => runStatus());
 
 // ---- faucet -----------------------------------------------------------------
 
@@ -1221,16 +1224,37 @@ const token = program.command("token").description("ERC-20 tokens tracked in you
 token
   .command("list", { isDefault: true })
   .description("list tracked tokens")
-  .action(() => {
+  .action(async () => {
     const { net, json } = ctx();
     const tokens = trackedTokens(loadConfig());
-    out(json, { network: net.key, tokens }, () => {
-      heading(`Tracked tokens · ${net.label}`);
-      if (tokens.length === 0) {
+
+    if (tokens.length === 0) {
+      out(json, { network: net.key, tokens: [] }, () => {
+        heading(`Tracked tokens · ${net.label}`);
         console.log(`  ${dim("None. Add one:")} ${dim("cowl token add 0x…")}`);
-        return;
+      });
+      return;
+    }
+
+    // Resolve symbols on chain so the list is readable; fall back to the address.
+    const s = json ? null : p.spinner();
+    s?.start("Reading tokens");
+    const rows = await Promise.all(
+      tokens.map((address) =>
+        tokenMeta(net, address as Address).then(
+          (m) => ({ address, symbol: m.symbol as string | null, decimals: m.decimals as number | null }),
+          () => ({ address, symbol: null, decimals: null }),
+        ),
+      ),
+    );
+    s?.stop(net.label);
+
+    out(json, { network: net.key, tokens: rows }, () => {
+      heading(`Tracked tokens · ${net.label}`);
+      for (const r of rows) {
+        const label = r.symbol ?? "unreadable";
+        console.log(`  ${symbols.dot()} ${bold(bone(label.padEnd(8)))} ${muted(r.address)}`);
       }
-      for (const t of tokens) console.log(`  ${symbols.dot()} ${muted(t)}`);
     });
   });
 
@@ -1241,11 +1265,10 @@ token
   .action(async (address: string) => {
     const { net } = ctx();
     if (!isAddress(address)) die("Invalid token address.");
-    const owner = keystoreAddress();
     const s = p.spinner();
     s.start("Reading token");
     try {
-      const info = await tokenInfo(net, address as Address, (owner ?? address) as Address);
+      const info = await tokenMeta(net, address as Address);
       s.stop(info.symbol);
       saveConfig(addTrackedToken(loadConfig(), address));
       ok(`Tracking ${acid(info.symbol)} ${muted(address)}`);
@@ -1361,7 +1384,7 @@ program.action(() => {
       guess ? `Did you mean "cowl ${guess}"? Run cowl --help for everything.` : "Run cowl --help to see every command.",
     );
   }
-  runStatus();
+  runStatus(true);
 });
 
 // ---- run --------------------------------------------------------------------

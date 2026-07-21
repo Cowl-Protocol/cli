@@ -86,6 +86,19 @@ export async function nativeBalance(net: NetworkDef, address: Address): Promise<
   return formatEther(wei);
 }
 
+/** ERC-20 metadata only, for listing tokens without needing a holder. */
+export async function tokenMeta(
+  net: NetworkDef,
+  token: Address,
+): Promise<{ symbol: string; decimals: number }> {
+  const client = publicClient(net);
+  const [decimals, symbol] = await Promise.all([
+    client.readContract({ address: token, abi: ERC20_ABI, functionName: "decimals" }),
+    client.readContract({ address: token, abi: ERC20_ABI, functionName: "symbol" }),
+  ]);
+  return { decimals, symbol };
+}
+
 /** Full ERC-20 read: raw balance plus the metadata needed to value it. */
 export async function tokenInfo(
   net: NetworkDef,
