@@ -80,6 +80,8 @@ Requires **Node.js 18+**. The command is `cowl`.
 
 ```bash
 cowl init                 # create a wallet + view key, pick a network
+cowl                      # quick status overview (offline)
+cowl faucet               # where to get testnet funds
 cowl balance              # read your on-chain balance
 cowl address              # fresh stealth address to receive privately
 cowl fees                 # protocol fee schedule
@@ -146,8 +148,10 @@ cowl send 100 0xToken… 0xRecipient…     # ERC-20 transfer
 
 ## Networks & config
 
-Robinhood Chain is an Arbitrum-based L2. Until its public testnet ships, **Arbitrum Sepolia** is
-the working default, so reads and connectivity are real today. Everything is overridable.
+Robinhood Chain is an Arbitrum-based L2. Its public testnet (chainId `46630`, live since Feb 2026)
+is the default, so reads, transfers, and connectivity are real today; mainnet (chainId `4663`) and
+Arbitrum Sepolia are also built in. The official Robinhood RPC is geo-restricted in some regions,
+so the default points at a globally-reachable endpoint — swap it any time. Everything is overridable.
 
 ```bash
 cowl network                    # list networks (active is marked)
@@ -156,6 +160,13 @@ cowl network use <key>          # switch active network
 cowl config show                # resolved network + contract addresses
 cowl config set rpcUrl <url>    # override the RPC
 cowl config set contracts.pool 0x…      # set a contract address once deployed
+```
+
+## Status & faucet
+
+```bash
+cowl                            # or `cowl status` — offline overview of wallet, network, contracts
+cowl faucet                     # testnet faucet links for the active network + your address
 ```
 
 Global flags: `--network <key>`, `--rpc <url>`, and `--json` (machine-readable output) work on
@@ -174,17 +185,43 @@ See the docs for detail: [fee structure](https://cowlprotocol.com/docs/fee-struc
 
 ---
 
-## Shielded pool (testnet-first)
+## Shielded pool
 
-Deposits, private trades, withdrawals, and staking run against the on-chain Cowl contracts. Until
-those are deployed on a public network, these commands report their status and the config needed to
-point them at a deployment:
+Your **private balance**. Funds you shield become **notes** — hidden UTXOs whose commitments live
+in a Poseidon Merkle tree; spending one reveals only a **nullifier**, never the note. Balances are
+computed locally by scanning for notes encrypted to your view key, so your book never touches the
+public explorer.
 
 ```bash
-cowl shield <amount> [token]    # deposit into the shielded pool
-cowl unshield <amount> [token]  # withdraw
-cowl trade <side> <amount> <market>
-cowl stake <amount>             # stake $COWL
+cowl shield 0.1 ETH             # move funds into your shielded balance
+cowl balance --shielded         # your private portfolio, grouped by token
+cowl receive                    # your zcowl: payment address — share it to be paid privately
+cowl send 0.05 ETH zcowl:0x…    # private, in-pool transfer to a zcowl: address
+cowl scan                       # find notes paid to you
+cowl unshield 0.05 ETH          # move funds back out
+```
+
+### Private trades
+
+A shielded swap spends a note of one token and mints a note of another, so your size and direction
+never hit the public explorer. `amount` is what you spend: the base for `sell`, the quote for `buy`.
+
+```bash
+cowl markets                    # markets + indicative prices (ETH, USDG, tokenized stocks)
+cowl trade sell 4 TSLA-USDG     # spend 4 TSLA from your shielded balance, receive USDG
+cowl trade buy 240 NVDA-USDG    # spend 240 USDG, receive NVDA
+```
+
+Pricing here is an indicative quote plus the protocol fee; real routing goes through an on-chain DEX
+adapter once the pool deploys.
+
+The note format (Poseidon commitments and nullifiers over the BN254 field) is the exact witness the
+Noir circuits prove over. **Testnet-first:** until the pool contract deploys, these run against a
+local pool on your machine — the cryptography is real, but there is no on-chain transaction or
+settlement yet. Point a shared pool file with `COWL_POOL_DIR` to try a multi-party flow locally.
+
+```bash
+cowl stake <amount>             # stake $COWL (lights up when the staking contract deploys)
 ```
 
 ---
@@ -196,9 +233,13 @@ cowl stake <amount>             # stake $COWL
   keystore.json     # encrypted EVM key   (scrypt + AES-256-GCM, mode 0600)
   viewkey.json      # ed25519 view key    (mode 0600)
   config.json       # network + overrides (mode 0600)
+  shielded/
+    pool-<net>.json   # local shielded-pool ledger (commitments, nullifiers)
+    notes-<net>.json  # your discovered notes
 ```
 
-Override the directory with `COWL_HOME`.
+Environment overrides: `COWL_HOME` (data directory), `COWL_POOL_DIR` (shared pool ledger),
+`COWL_PASSPHRASE` (non-interactive unlock for scripting/CI — never echoed).
 
 ---
 

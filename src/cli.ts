@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import * as p from "@clack/prompts";
-import { isAddress, type Address } from "viem";
+import { isAddress, parseEther, formatEther, type Address } from "viem";
 import {
   acid,
   bone,
@@ -36,14 +36,20 @@ import {
 import { deriveMetaKeys, generateStealthAddress } from "./stealth.js";
 import { createViewKey, readViewKey, viewKeyExists } from "./viewkey.js";
 import { FEES, FEE_SPLIT } from "./fees.js";
+import { FAUCETS } from "./faucets.js";
 import { logo } from "./logo.js";
+import { deriveShieldedKeys, decodePaymentAddress, isPaymentAddress, type ShieldedKeys } from "./shielded/keys.js";
+import { tokenToField, tokenLabel } from "./shielded/note.js";
+import { shield as poolShield, unshield as poolUnshield, sendPrivate, balance as poolBalance, scan as poolScan, trade as poolTrade } from "./shielded/pool.js";
+import { MARKETS, PROTOCOL_FEE_BPS, quoteTrade, type Side } from "./shielded/market.js";
 
 /** The wordmark needs ~35 columns; fall back to the compact banner when narrow. */
 function splash(): string {
   return (process.stdout.columns ?? 0) >= 38 ? logo() : banner();
 }
 
-const VERSION = "0.1.2";
+// Replaced at build time from package.json (see build.mjs); `dev` fallback otherwise.
+const VERSION = process.env.COWL_VERSION ?? "0.0.0-dev";
 
 const program = new Command();
 program
@@ -86,6 +92,9 @@ function unwrap<T>(value: T | symbol): T {
 }
 
 function askPassphrase(message = "Keystore passphrase"): Promise<string> {
+  // Non-interactive escape hatch for scripting/CI. Never echoed.
+  const env = process.env.COWL_PASSPHRASE;
+  if (env) return Promise.resolve(env);
   return p.password({ message }).then(unwrap);
 }
 
@@ -97,6 +106,23 @@ function out(json: boolean, obj: unknown, human: () => void) {
   if (json) console.log(JSON.stringify(obj, null, 2));
   else human();
 }
+
+/** Unlock the wallet and derive the shielded-pool keys. */
+async function shieldedKeys(): Promise<ShieldedKeys> {
+  requireWallet();
+  const pass = await askPassphrase();
+  const pk = exportPrivateKey(pass);
+  return deriveShieldedKeys(pk);
+}
+
+/** Until the pool contract deploys, shielded ops are a local, off-chain simulation. */
+function localNotice(net: NetworkDef): void {
+  if (net.contracts.pool) return;
+  console.log(
+    `\n  ${warnMark()} ${muted("Local shielded pool — no contract on")} ${bone(net.label)} ${muted("yet, so this is recorded off-chain only. Real on-chain privacy lights up when the pool deploys.")}`,
+  );
+}
+const warnMark = () => acid("!");
 
 /** Feature that needs on-chain Cowl contracts that aren't deployed yet. */
 function pending(feature: string, which: keyof CowlContracts, net: NetworkDef): never {
@@ -172,7 +198,10 @@ program
     row("Address", acid(address));
     row("Network", bone(NETWORKS[netKey]!.label));
     row("Stored in", muted(displayPath(COWL_DIR)));
-    console.log(`\n  ${muted("Next:")} ${dim("cowl balance")} ${muted("·")} ${dim("cowl address")} ${muted("·")} ${dim("cowl fees")}`);
+    const next = NETWORKS[netKey]!.testnet
+      ? `${dim("cowl faucet")} ${muted("·")} ${dim("cowl balance")} ${muted("·")} ${dim("cowl address")}`
+      : `${dim("cowl balance")} ${muted("·")} ${dim("cowl address")} ${muted("·")} ${dim("cowl fees")}`;
+    console.log(`\n  ${muted("Next:")} ${next}`);
   });
 
 // ---- wallet -----------------------------------------------------------------
@@ -303,11 +332,29 @@ config
 
 program
   .command("balance")
-  .description("show your on-chain balance")
+  .description("show your on-chain balance (or --shielded for your private balance)")
   .option("-t, --token <address>", "ERC-20 token address")
-  .action(async (opts: { token?: string }) => {
-    const address = requireWallet();
+  .option("-s, --shielded", "show your shielded (private) balance")
+  .action(async (opts: { token?: string; shielded?: boolean }) => {
     const { net, json } = ctx();
+
+    if (opts.shielded) {
+      const sym = net.currency.symbol;
+      const keys = await shieldedKeys();
+      const bal = poolBalance(net.key, keys);
+      out(json, { shielded: bal.map((b) => ({ token: tokenLabel(b.token, sym), amount: formatEther(b.amount), notes: b.notes })) }, () => {
+        heading("Shielded balance");
+        if (bal.length === 0) {
+          console.log(`  ${dim("Empty. Fund it with")} ${dim("cowl shield <amount>")}`);
+        } else {
+          for (const b of bal) row(tokenLabel(b.token, sym), `${bold(formatEther(b.amount))} ${muted(`· ${b.notes} note${b.notes === 1 ? "" : "s"}`)}`);
+        }
+        localNotice(net);
+      });
+      return;
+    }
+
+    const address = requireWallet();
     const s = json ? null : p.spinner();
     s?.start(`Reading ${net.label}`);
     try {
@@ -440,6 +487,98 @@ program
     }
   });
 
+// ---- status (offline overview) ----------------------------------------------
+
+/** A fast, offline snapshot of your setup — no RPC calls. */
+function runStatus(): void {
+  const { net, json } = ctx();
+  const addr = keystoreAddress();
+  const vkey = readViewKey();
+  const c = net.contracts;
+
+  if (json) {
+    console.log(
+      JSON.stringify(
+        {
+          wallet: addr,
+          viewKey: vkey ? { publicKey: vkey.publicKey, createdAt: vkey.createdAt } : null,
+          network: { key: net.key, label: net.label, chainId: net.chainId, rpcUrl: net.rpcUrl, explorer: net.explorer, testnet: net.testnet },
+          contracts: { pool: c.pool ?? null, relayer: c.relayer ?? null, staking: c.staking ?? null },
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  console.log(splash());
+  heading(`Status · ${net.label}`);
+  row("Wallet", addr ? acid(addr) : dim("not set up → cowl init"));
+  row("View key", vkey ? `${symbols.ok()} ${muted(`created ${vkey.createdAt.slice(0, 10)}`)}` : dim("none → cowl viewkey new"));
+  row("Network", `${bone(net.key)} ${muted(`· chainId ${net.chainId}`)}`);
+  row("RPC", net.rpcUrl ? muted(net.rpcUrl) : dim("unset → cowl config set rpcUrl <url>"));
+
+  heading("Shielded protocol");
+  const contract = (v?: string) => (v ? acid(v) : dim("not deployed yet"));
+  row("pool", contract(c.pool));
+  row("relayer", contract(c.relayer));
+  row("staking", contract(c.staking));
+
+  if (!addr) {
+    console.log(`\n  ${muted("Start here:")} ${dim("cowl init")}`);
+  } else {
+    console.log(
+      `\n  ${muted("Next:")} ${dim("cowl balance")} ${muted("·")} ${dim("cowl address")} ${muted("·")} ${dim("cowl faucet")} ${muted("·")} ${dim("cowl ping")}`,
+    );
+  }
+}
+
+program
+  .command("status")
+  .description("show a quick overview of your wallet, network, and protocol status")
+  .action(runStatus);
+
+// ---- faucet -----------------------------------------------------------------
+
+program
+  .command("faucet")
+  .description("where to get testnet funds for the active network")
+  .action(() => {
+    const { net, json } = ctx();
+    const list = FAUCETS[net.key] ?? [];
+    const addr = keystoreAddress();
+
+    if (json) {
+      console.log(JSON.stringify({ network: net.key, address: addr, faucets: list }, null, 2));
+      return;
+    }
+
+    if (!net.testnet) {
+      warn(`${bone(net.label)} is not a testnet — there is no faucet.`);
+      console.log(`  ${muted("Switch to a testnet:")} ${dim("cowl network use robinhood-testnet")}`);
+      return;
+    }
+
+    heading(`Faucets · ${net.label}`);
+    if (list.length === 0) {
+      console.log(`  ${dim("No faucets on file for this network.")}`);
+    } else {
+      for (const f of list) {
+        console.log(`  ${symbols.dot()} ${bold(bone(f.name))}`);
+        console.log(`      ${muted(f.url)}`);
+        if (f.note) console.log(`      ${dim(f.note)}`);
+      }
+    }
+
+    if (addr) {
+      console.log(`\n  ${muted("Paste this address into the faucet:")}`);
+      console.log(`  ${acid(addr)}`);
+    } else {
+      console.log(`\n  ${muted("Create a wallet first:")} ${dim("cowl init")}`);
+    }
+  });
+
 // ---- logo -------------------------------------------------------------------
 
 program
@@ -453,15 +592,37 @@ program
 
 program
   .command("send")
-  .description("send funds to an address (native coin or ERC-20)")
+  .description("send funds — publicly to an 0x address, or privately to a zcowl: address")
   .argument("<amount>", "amount, e.g. 0.01")
   .argument("<token>", "native symbol (e.g. ETH) or an ERC-20 address")
-  .argument("<to>", "recipient address (a stealth address works)")
+  .argument("<to>", "recipient: 0x address (public) or zcowl: address (private)")
   .action(async (amount: string, token: string, to: string) => {
-    const address = requireWallet();
     const { net } = ctx();
-    if (!isAddress(to)) die("Invalid recipient address.");
     if (!(Number(amount) > 0)) die("Amount must be positive.");
+
+    // A zcowl: recipient is a private, in-pool transfer from your shielded balance.
+    if (isPaymentAddress(to)) {
+      const sym = net.currency.symbol;
+      const tokenField = tokenToField(token, sym);
+      const recipient = decodePaymentAddress(to);
+      const keys = await shieldedKeys();
+      try {
+        const res = sendPrivate(net.key, keys, recipient, parseEther(amount), tokenField);
+        heading("Private send");
+        row("To", bone(to.slice(0, 22) + "…"));
+        row("Amount", `${bold(amount)} ${muted(tokenLabel(tokenField, sym))}`);
+        row("Nullifiers", muted(res.nullifiers.length === 1 ? res.nullifiers[0]! : `${res.nullifiers.length} notes spent`));
+        if (res.outCommitment) row("Output note", muted(res.outCommitment));
+        if (res.changeCommitment) row("Change note", muted(res.changeCommitment));
+        localNotice(net);
+      } catch (e) {
+        die((e as Error).message);
+      }
+      return;
+    }
+
+    const address = requireWallet();
+    if (!isAddress(to)) die("Invalid recipient address.", "Use a 0x address (public) or a zcowl: address (private).");
 
     const isNative = token.toUpperCase() === net.currency.symbol.toUpperCase();
     if (!isNative && !isAddress(token)) die(`Unknown token "${token}".`, `Use ${net.currency.symbol} or an ERC-20 address.`);
@@ -495,35 +656,134 @@ program
     }
   });
 
-// ---- protocol ops (testnet-first, gated on deployed contracts) --------------
+// ---- shielded pool ----------------------------------------------------------
 
 program
   .command("shield")
-  .description("deposit into the shielded pool")
-  .argument("<amount>")
-  .argument("[token]")
-  .action(() => pending("Shielding", "pool", ctx().net));
+  .description("move funds into your shielded (private) balance")
+  .argument("<amount>", "amount, e.g. 0.1")
+  .argument("[token]", "native symbol (default) or an ERC-20 address")
+  .action(async (amount: string, token?: string) => {
+    const { net } = ctx();
+    const sym = net.currency.symbol;
+    if (!(Number(amount) > 0)) die("Amount must be positive.");
+    const tokenField = tokenToField(token ?? sym, sym);
+    const keys = await shieldedKeys();
+    const res = poolShield(net.key, keys, parseEther(amount), tokenField);
+    heading("Shielded");
+    row("Amount", `${bold(amount)} ${muted(tokenLabel(tokenField, sym))}`);
+    row("Commitment", muted(res.commitment));
+    row("Leaf", muted(`#${res.leafIndex}`));
+    row("Root", muted(res.root));
+    localNotice(net);
+  });
 
 program
   .command("unshield")
-  .description("withdraw from the shielded pool")
-  .argument("<amount>")
-  .argument("[token]")
-  .action(() => pending("Unshielding", "pool", ctx().net));
+  .description("move funds out of your shielded balance")
+  .argument("<amount>", "amount, e.g. 0.1")
+  .argument("[token]", "native symbol (default) or an ERC-20 address")
+  .action(async (amount: string, token?: string) => {
+    const { net } = ctx();
+    const sym = net.currency.symbol;
+    if (!(Number(amount) > 0)) die("Amount must be positive.");
+    const tokenField = tokenToField(token ?? sym, sym);
+    const keys = await shieldedKeys();
+    try {
+      const res = poolUnshield(net.key, keys, parseEther(amount), tokenField);
+      heading("Unshielded");
+      row("Amount", `${bold(amount)} ${muted(tokenLabel(tokenField, sym))}`);
+      row("Nullifiers", muted(res.nullifiers.length === 1 ? res.nullifiers[0]! : `${res.nullifiers.length} notes spent`));
+      if (res.changeCommitment) row("Change note", muted(res.changeCommitment));
+      localNotice(net);
+    } catch (e) {
+      die((e as Error).message);
+    }
+  });
+
+program
+  .command("receive")
+  .description("show your shielded payment address (share it to be paid privately)")
+  .action(async () => {
+    const { json } = ctx();
+    const keys = await shieldedKeys();
+    out(json, { paymentAddress: keys.paymentAddress }, () => {
+      heading("Shielded payment address");
+      console.log(`  ${acid(keys.paymentAddress)}`);
+      console.log(`  ${muted("Share this. Payments to it land in your shielded balance, unlinkable on-chain.")}`);
+    });
+  });
+
+program
+  .command("scan")
+  .description("scan the shielded pool for notes paid to you")
+  .action(async () => {
+    const { net, json } = ctx();
+    const keys = await shieldedKeys();
+    const { discovered } = poolScan(net.key, keys);
+    out(json, { discovered }, () =>
+      ok(discovered > 0 ? `Found ${bold(String(discovered))} new note${discovered === 1 ? "" : "s"}.` : "No new notes."),
+    );
+  });
+
+program
+  .command("markets")
+  .description("list private-trade markets and indicative prices")
+  .action(() => {
+    const { json } = ctx();
+    const list = Object.values(MARKETS).map((m) => ({ market: m.key, base: m.base, quote: m.quote, price: formatEther(m.priceWad) }));
+    out(json, { markets: list, feeBps: Number(PROTOCOL_FEE_BPS) }, () => {
+      heading("Markets");
+      for (const m of list) row(m.market, `${bold(m.price)} ${muted(m.quote)}`);
+      console.log(`\n  ${muted(`Protocol fee ~${(Number(PROTOCOL_FEE_BPS) / 100).toFixed(2)}% · indicative prices, local sim.`)}`);
+    });
+  });
 
 program
   .command("trade")
-  .description("execute a private trade")
+  .description("private trade: swap one shielded token for another")
   .argument("<side>", "buy | sell")
-  .argument("<amount>")
-  .argument("<market>")
-  .action(() => pending("Private trading", "pool", ctx().net));
+  .argument("<amount>", "amount you spend (base for sell, quote for buy)")
+  .argument("<market>", "market, e.g. TSLA-USDG")
+  .action(async (side: string, amount: string, market: string) => {
+    const { net } = ctx();
+    const sym = net.currency.symbol;
+    const sideNorm = side.toLowerCase();
+    if (sideNorm !== "buy" && sideNorm !== "sell") die('Side must be "buy" or "sell".');
+    const mkey = market.toUpperCase();
+    if (!MARKETS[mkey]) die(`Unknown market "${market}".`, `Known: ${Object.keys(MARKETS).join(", ")}`);
+    if (!(Number(amount) > 0)) die("Amount must be positive.");
+
+    const q = quoteTrade(mkey, sideNorm as Side, parseEther(amount));
+    const inField = tokenToField(q.inputSymbol, sym);
+    const outField = tokenToField(q.outputSymbol, sym);
+    const keys = await shieldedKeys();
+    try {
+      const res = poolTrade(net.key, keys, inField, outField, q.amountIn, q.amountOut);
+      heading("Private trade");
+      row("Market", bone(mkey));
+      row("Side", sideNorm === "buy" ? acid("buy") : acid("sell"));
+      row("Spent", `${bold(formatEther(q.amountIn))} ${muted(q.inputSymbol)}`);
+      row("Received", `${bold(formatEther(q.amountOut))} ${muted(q.outputSymbol)}`);
+      row("Price", muted(`${formatEther(q.priceWad)} ${MARKETS[mkey]!.quote} / ${MARKETS[mkey]!.base}`));
+      row("Fee", muted(`${formatEther(q.feeAmount)} ${q.feeToken}`));
+      row("Output note", muted(res.outputCommitment));
+      if (res.changeCommitment) row("Change note", muted(res.changeCommitment));
+      localNotice(net);
+    } catch (e) {
+      die((e as Error).message);
+    }
+  });
 
 program
   .command("stake")
   .description("stake $COWL to back the network")
   .argument("<amount>")
   .action(() => pending("Staking", "staking", ctx().net));
+
+// ---- default: bare `cowl` shows status --------------------------------------
+
+program.action(() => runStatus());
 
 // ---- run --------------------------------------------------------------------
 
