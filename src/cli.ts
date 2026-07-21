@@ -37,6 +37,11 @@ import {
   importKeystore,
   exportPrivateKey,
   changePassphrase,
+  newMnemonic,
+  importMnemonic,
+  exportMnemonic,
+  hasMnemonic,
+  DERIVATION_PATH,
 } from "./keystore.js";
 import {
   nativeBalance,
@@ -121,6 +126,35 @@ function out(json: boolean, obj: unknown, human: () => void) {
   else human();
 }
 
+/** Print a seed phrase as a numbered grid, with the warnings it deserves. */
+function revealMnemonic(mnemonic: string): void {
+  const words = mnemonic.split(" ");
+  heading("Your seed phrase");
+  const perRow = 4;
+  for (let i = 0; i < words.length; i += perRow) {
+    const cells = words.slice(i, i + perRow).map((w, j) => `${muted(String(i + j + 1).padStart(2))} ${bold(bone(w.padEnd(9)))}`);
+    console.log(`  ${cells.join(" ")}`);
+  }
+  console.log(`\n  ${warnMark()} ${bold("Write these words down, in order, on paper.")}`);
+  console.log(`  ${muted("Anyone holding this phrase owns the wallet. Nobody can recover it for you.")}`);
+  console.log(`  ${muted(`Opens in any wallet at ${DERIVATION_PATH}.`)}`);
+}
+
+/** Pick how a new wallet should be backed up. */
+async function chooseWalletMode(opts: { key?: boolean; mnemonic?: boolean }): Promise<"mnemonic" | "key"> {
+  if (opts.key) return "key";
+  if (opts.mnemonic) return "mnemonic";
+  if (process.env.COWL_PASSPHRASE) return "mnemonic";
+  const sel = await p.select({
+    message: "How do you want to back this wallet up?",
+    options: [
+      { value: "mnemonic", label: "Seed phrase (12 words)", hint: "recommended · opens in MetaMask or Rabby" },
+      { value: "key", label: "Private key only", hint: "no phrase, and none can be added later" },
+    ],
+  });
+  return unwrap(sel) as "mnemonic" | "key";
+}
+
 /** Ask for a new passphrase and push back on weak ones before they seal anything. */
 async function askNewPassphrase(message: string): Promise<string> {
   const pass = await askPassphrase(message);
@@ -191,15 +225,27 @@ program
     const modeSel = await p.select({
       message: "Wallet",
       options: [
-        { value: "new", label: "Create a new wallet" },
-        { value: "import", label: "Import an existing private key" },
+        { value: "new-seed", label: "Create a new wallet", hint: "seed phrase · recommended" },
+        { value: "new-key", label: "Create a new wallet", hint: "private key only" },
+        { value: "import-seed", label: "Import a seed phrase" },
+        { value: "import-key", label: "Import a private key" },
       ],
     });
-    const mode = unwrap(modeSel);
+    const mode = unwrap(modeSel) as string;
 
-    let pk: string | undefined;
-    if (mode === "import") {
-      pk = unwrap(await p.text({ message: "Private key (0x…)", validate: (v) => (/^0x?[0-9a-fA-F]{64}$/.test(v.trim()) ? undefined : "Need a 32-byte hex key.") }));
+    let secret: string | undefined;
+    if (mode === "import-key") {
+      secret = unwrap(await p.text({ message: "Private key (0x…)", validate: (v) => (/^0x?[0-9a-fA-F]{64}$/.test(v.trim()) ? undefined : "Need a 32-byte hex key.") }));
+    } else if (mode === "import-seed") {
+      secret = unwrap(
+        await p.text({
+          message: "Seed phrase (12 or 24 words)",
+          validate: (v) => {
+            const n = v.trim().split(/\s+/).length;
+            return n === 12 || n === 24 ? undefined : "A BIP-39 phrase is 12 or 24 words.";
+          },
+        }),
+      );
     }
 
     const pass = await askNewPassphrase("Choose a passphrase (encrypts your key)");
@@ -216,7 +262,26 @@ program
     });
     const netKey = unwrap(netSel) as string;
 
-    const address = mode === "import" ? importKeystore(pk!, pass) : createKeystore(pass);
+    let generated: string | undefined;
+    let address: `0x${string}`;
+    try {
+      switch (mode) {
+        case "new-seed":
+          generated = newMnemonic();
+          address = importMnemonic(generated, pass);
+          break;
+        case "new-key":
+          address = createKeystore(pass);
+          break;
+        case "import-seed":
+          address = importMnemonic(secret!, pass);
+          break;
+        default:
+          address = importKeystore(secret!, pass);
+      }
+    } catch (e) {
+      die((e as Error).message);
+    }
 
     const cfg = loadConfig();
     cfg.network = netKey;
@@ -225,6 +290,7 @@ program
     if (!viewKeyExists()) createViewKey(new Date().toISOString());
 
     p.outro(`${symbols.ok()} ${bold("Ready.")}`);
+    if (generated) revealMnemonic(generated);
     row("Address", acid(address));
     row("Network", bone(NETWORKS[netKey]!.label));
     row("Stored in", muted(displayPath(COWL_DIR)));
@@ -240,28 +306,51 @@ const wallet = program.command("wallet").description("manage your local wallet")
 
 wallet
   .command("new")
-  .description("create a new wallet")
+  .description("create a new wallet, backed by a seed phrase or a private key")
   .option("--force", "overwrite an existing wallet")
-  .action(async (opts: { force?: boolean }) => {
+  .option("--mnemonic", "back it with a 12-word seed phrase")
+  .option("--key", "back it with a private key only")
+  .action(async (opts: { force?: boolean; mnemonic?: boolean; key?: boolean }) => {
     if (keystoreExists() && !opts.force) die("A wallet already exists.", "Overwrite: cowl wallet new --force");
+    if (opts.mnemonic && opts.key) die("Pick one of --mnemonic or --key.");
+    const mode = await chooseWalletMode(opts);
     const pass = await askNewPassphrase("Choose a passphrase");
     const pass2 = await askPassphrase("Confirm passphrase");
     if (pass !== pass2) die("Passphrases do not match.");
-    const address = createKeystore(pass);
+
+    if (mode === "key") {
+      const address = createKeystore(pass);
+      ok(`New wallet: ${acid(address)}`);
+      console.log(`  ${muted("Private key only. Back it up with")} ${dim("cowl backup <path>")}`);
+      return;
+    }
+    const phrase = newMnemonic();
+    const address = importMnemonic(phrase, pass);
     ok(`New wallet: ${acid(address)}`);
+    revealMnemonic(phrase);
   });
 
 wallet
   .command("import")
-  .description("import a private key")
-  .argument("[privateKey]", "0x-prefixed private key (prompted if omitted)")
+  .description("import a private key or a seed phrase")
+  .argument("[secret]", "private key or seed phrase (prompted if omitted)")
   .option("--force", "overwrite an existing wallet")
-  .action(async (pkArg: string | undefined, opts: { force?: boolean }) => {
+  .option("--mnemonic", "treat the argument as a seed phrase")
+  .action(async (secretArg: string | undefined, opts: { force?: boolean; mnemonic?: boolean }) => {
     if (keystoreExists() && !opts.force) die("A wallet already exists.", "Overwrite: cowl wallet import --force");
-    const pk = pkArg ?? (unwrap(await p.text({ message: "Private key (0x…)" })));
+    const secret =
+      secretArg ??
+      unwrap(await p.text({ message: opts.mnemonic ? "Seed phrase (12 or 24 words)" : "Private key (0x…)" }));
+    // A phrase is unambiguous: private keys are a single hex blob.
+    const isPhrase = opts.mnemonic || secret.trim().split(/\s+/).length > 1;
     const pass = await askNewPassphrase("Choose a passphrase");
-    const address = importKeystore(pk, pass);
-    ok(`Imported: ${acid(address)}`);
+    try {
+      const address = isPhrase ? importMnemonic(secret, pass) : importKeystore(secret, pass);
+      ok(`Imported: ${acid(address)}`);
+      if (isPhrase) console.log(`  ${muted(`Derived at ${DERIVATION_PATH}`)}`);
+    } catch (e) {
+      die((e as Error).message);
+    }
   });
 
 wallet
@@ -275,18 +364,37 @@ wallet
 
 wallet
   .command("export")
-  .description("reveal your private key (dangerous)")
-  .action(async () => {
+  .description("reveal your private key, or --mnemonic for your seed phrase (dangerous)")
+  .option("-m, --mnemonic", "show the seed phrase instead of the private key")
+  .action(async (opts: { mnemonic?: boolean }) => {
     requireWallet();
-    warn("This prints your private key in plaintext.");
+    if (opts.mnemonic && !hasMnemonic()) {
+      warn("This wallet has no seed phrase.");
+      console.log(`  ${muted("It was created from a raw private key, and a key cannot be turned back into a phrase.")}`);
+      console.log(`  ${muted("Export the key instead:")} ${dim("cowl wallet export")}`);
+      console.log(`  ${muted("Want a phrase? Create a new wallet and move your funds:")} ${dim("cowl wallet new --mnemonic")}`);
+      return;
+    }
+
+    warn(`This prints your ${opts.mnemonic ? "seed phrase" : "private key"} in plaintext.`);
     console.log(`  ${muted("Not while screen sharing or recording. Once it is captured, treat the wallet as burned.")}`);
     const go = unwrap(await p.confirm({ message: "Continue?", initialValue: false }));
     if (!go) return;
     const pass = await askPassphrase();
-    const pk = exportPrivateKey(pass);
-    console.log(`\n  ${bold(pk)}\n`);
-    warn("Anyone with this key controls your funds. Never share it.");
-    console.log(`  ${muted("Prefer")} ${dim("cowl backup <path>")} ${muted("— it stays encrypted at rest.")}`);
+
+    try {
+      if (opts.mnemonic) {
+        const phrase = exportMnemonic(pass);
+        if (!phrase) die("No seed phrase stored for this wallet.");
+        revealMnemonic(phrase);
+      } else {
+        console.log(`\n  ${bold(exportPrivateKey(pass))}\n`);
+        warn("Anyone with this key controls your funds. Never share it.");
+      }
+      console.log(`  ${muted("Prefer")} ${dim("cowl backup <path>")} ${muted("— it stays encrypted at rest.")}`);
+    } catch (e) {
+      die((e as Error).message);
+    }
   });
 
 wallet

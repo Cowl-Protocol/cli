@@ -98,13 +98,27 @@ broadcast a transaction.
 A local, encrypted EVM keystore. Your key is sealed with a passphrase (scrypt + AES-256-GCM) and
 never stored in plaintext.
 
+A new wallet can be backed by a **12-word seed phrase** or by a **private key** alone. The phrase is
+easier to write on paper and opens the same account in MetaMask or Rabby, since it derives at the
+standard path `m/44'/60'/0'/0/0`. It is stored encrypted beside the key so it can be shown again.
+
 ```bash
-cowl init                       # guided setup (new or import + passphrase + network)
-cowl wallet new                 # create a new wallet
-cowl wallet import [0x…]        # import a private key
-cowl wallet address             # print your address
-cowl wallet export              # reveal your private key (asks to confirm)
+cowl init                       # guided setup: new or import, phrase or key, passphrase, network
+cowl wallet new                 # asks which backup you want
+cowl wallet new --mnemonic      # 12-word seed phrase
+cowl wallet new --key           # private key only
+
+cowl wallet import "word word …"   # import a seed phrase
+cowl wallet import 0x…             # import a private key
+cowl wallet address                # print your address
+
+cowl wallet export              # reveal the private key (asks to confirm)
+cowl wallet export --mnemonic   # reveal the seed phrase
+cowl wallet passphrase          # rotate the keystore passphrase
 ```
+
+A private key cannot be turned back into a seed phrase. A wallet created from a raw key never gains
+one; to hold a phrase, create a new wallet and move your funds.
 
 ---
 
