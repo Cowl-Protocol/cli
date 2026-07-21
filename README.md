@@ -185,6 +185,23 @@ See the docs for detail: [fee structure](https://cowlprotocol.com/docs/fee-struc
 
 ---
 
+## Portfolio
+
+One view of everything you hold: what the explorer can see, and what it cannot.
+
+```bash
+cowl portfolio                  # public on-chain holdings + your shielded balance
+cowl portfolio --public         # on-chain only
+cowl portfolio --shielded       # shielded only
+
+cowl token add 0x…              # track an ERC-20 (reads its symbol and decimals on-chain)
+cowl token list                 # tracked tokens
+cowl token remove 0x…
+```
+
+Positions are valued in USDG and the summary reports how much of your book sits off the explorer.
+Native balance is always included; ERC-20s show up once you track them.
+
 ## Shielded pool
 
 Your **private balance**. Funds you shield become **notes** — hidden UTXOs whose commitments live

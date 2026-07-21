@@ -2,7 +2,10 @@
 // and mints a note of the output token, so the size and direction never hit the
 // public explorer. Pricing here is an indicative quote plus the protocol fee —
 // the real routing goes through an on-chain DEX adapter once the pool deploys.
-const WAD = 10n ** 18n;
+export const WAD = 10n ** 18n;
+
+/** Everything is valued in this token. */
+export const QUOTE_SYMBOL = "USDG";
 
 /** Protocol fee on each private trade, in basis points. Mirrors the fee model. */
 export const PROTOCOL_FEE_BPS = 10n; // ~0.10%
@@ -11,13 +14,34 @@ export type MarketDef = { key: string; base: string; quote: string; priceWad: bi
 
 const price = (whole: number) => BigInt(whole) * WAD;
 
-// Every market is quoted in USDG. Prices are indicative, for the local sim only.
-export const MARKETS: Record<string, MarketDef> = {
-  "ETH-USDG": { key: "ETH-USDG", base: "ETH", quote: "USDG", priceWad: price(3000) },
-  "TSLA-USDG": { key: "TSLA-USDG", base: "TSLA", quote: "USDG", priceWad: price(250) },
-  "AAPL-USDG": { key: "AAPL-USDG", base: "AAPL", quote: "USDG", priceWad: price(190) },
-  "NVDA-USDG": { key: "NVDA-USDG", base: "NVDA", quote: "USDG", priceWad: price(120) },
-};
+// Every market is quoted in USDG. Prices are placeholders for the local sim; a
+// price feed replaces them when the on-chain DEX adapter lands.
+const market = (base: string, whole: number): MarketDef => ({
+  key: `${base}-${QUOTE_SYMBOL}`,
+  base,
+  quote: QUOTE_SYMBOL,
+  priceWad: price(whole),
+});
+
+export const MARKETS: Record<string, MarketDef> = Object.fromEntries(
+  [
+    market("ETH", 3000),
+    market("TSLA", 250),
+    market("AMZN", 230),
+    market("NFLX", 900),
+    market("PLTR", 180),
+    market("AMD", 170),
+    market("AAPL", 190),
+    market("NVDA", 120),
+  ].map((m) => [m.key, m]),
+);
+
+/** Price of one unit of `symbol` in the quote token, WAD scaled. Null if unpriced. */
+export function priceInQuoteWad(symbol: string): bigint | null {
+  const up = symbol.toUpperCase();
+  if (up === QUOTE_SYMBOL) return WAD;
+  return MARKETS[`${up}-${QUOTE_SYMBOL}`]?.priceWad ?? null;
+}
 
 export type Side = "buy" | "sell";
 

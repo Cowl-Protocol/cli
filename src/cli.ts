@@ -16,7 +16,16 @@ import {
   symbols,
 } from "./ui.js";
 import { COWL_DIR, CONFIG_PATH, displayPath } from "./paths.js";
-import { loadConfig, saveConfig, activeNetwork, setConfigValue, type Config } from "./config.js";
+import {
+  loadConfig,
+  saveConfig,
+  activeNetwork,
+  setConfigValue,
+  trackedTokens,
+  addTrackedToken,
+  removeTrackedToken,
+  type Config,
+} from "./config.js";
 import { NETWORKS, type NetworkDef, type CowlContracts } from "./networks.js";
 import {
   keystoreExists,
@@ -28,6 +37,7 @@ import {
 import {
   nativeBalance,
   tokenBalance,
+  tokenInfo,
   sendNative,
   sendToken,
   waitForReceipt,
@@ -41,7 +51,7 @@ import { logo } from "./logo.js";
 import { deriveShieldedKeys, decodePaymentAddress, isPaymentAddress, type ShieldedKeys } from "./shielded/keys.js";
 import { tokenToField, tokenLabel } from "./shielded/note.js";
 import { shield as poolShield, unshield as poolUnshield, sendPrivate, balance as poolBalance, scan as poolScan, trade as poolTrade } from "./shielded/pool.js";
-import { MARKETS, PROTOCOL_FEE_BPS, quoteTrade, type Side } from "./shielded/market.js";
+import { MARKETS, PROTOCOL_FEE_BPS, QUOTE_SYMBOL, WAD, priceInQuoteWad, quoteTrade, type Side } from "./shielded/market.js";
 
 /** The wordmark needs ~35 columns; fall back to the compact banner when narrow. */
 function splash(): string {
@@ -724,6 +734,235 @@ program
     out(json, { discovered }, () =>
       ok(discovered > 0 ? `Found ${bold(String(discovered))} new note${discovered === 1 ? "" : "s"}.` : "No new notes."),
     );
+  });
+
+/** Format a WAD-scaled amount to a fixed number of decimals. */
+function fmt(x: bigint, decimals = 2): string {
+  return Number(formatEther(x)).toLocaleString("en-US", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+}
+
+/** Trim a WAD amount to at most 6 decimals, without trailing zeros. */
+function fmtAmount(x: bigint): string {
+  const s = formatEther(x);
+  if (!s.includes(".")) return s;
+  const [whole, frac = ""] = s.split(".");
+  const trimmed = frac.slice(0, 6).replace(/0+$/, "");
+  return trimmed ? `${whole}.${trimmed}` : whole!;
+}
+
+/** Scale a raw token amount to 18 decimals so everything values consistently. */
+function toWad(raw: bigint, decimals: number): bigint {
+  if (decimals === 18) return raw;
+  return decimals < 18 ? raw * 10n ** BigInt(18 - decimals) : raw / 10n ** BigInt(decimals - 18);
+}
+
+type PortfolioRow = { symbol: string; amount: bigint; value: bigint | null; notes?: number };
+
+const COLS = { asset: 8, amount: 16, value: 15, share: 7 };
+
+function valueOf(symbol: string, amountWad: bigint): bigint | null {
+  const price = priceInQuoteWad(symbol);
+  return price === null ? null : (amountWad * price) / WAD;
+}
+
+function sortByValue(rows: PortfolioRow[]): PortfolioRow[] {
+  return [...rows].sort((a, b) => ((b.value ?? 0n) > (a.value ?? 0n) ? 1 : (b.value ?? 0n) < (a.value ?? 0n) ? -1 : 0));
+}
+
+/** Print one portfolio section and return its total value. */
+function renderSection(title: string, note: string, rows: PortfolioRow[], emptyHint: string): bigint {
+  const sorted = sortByValue(rows);
+  const total = sorted.reduce((s, r) => s + (r.value ?? 0n), 0n);
+
+  heading(title);
+  console.log(`  ${dim(note)}`);
+  if (sorted.length === 0) {
+    console.log(`  ${dim(emptyHint)}`);
+    return 0n;
+  }
+
+  console.log(
+    `  ${muted("ASSET".padEnd(COLS.asset))} ${muted("AMOUNT".padStart(COLS.amount))} ${muted(
+      `VALUE (${QUOTE_SYMBOL})`.padStart(COLS.value),
+    )} ${muted("SHARE".padStart(COLS.share))}`,
+  );
+  for (const r of sorted) {
+    const share = total > 0n && r.value !== null ? `${(Number((r.value * 10000n) / total) / 100).toFixed(1)}%` : "—";
+    console.log(
+      `  ${bone(r.symbol.padEnd(COLS.asset))} ${bold(fmtAmount(r.amount).padStart(COLS.amount))} ${acid(
+        (r.value === null ? "—" : fmt(r.value)).padStart(COLS.value),
+      )} ${muted(share.padStart(COLS.share))}`,
+    );
+  }
+  console.log(`  ${muted("─".repeat(COLS.asset + COLS.amount + COLS.value + COLS.share + 3))}`);
+  const notes = sorted.reduce((s, r) => s + (r.notes ?? 0), 0);
+  console.log(
+    `  ${bold(bone("Subtotal".padEnd(COLS.asset)))} ${"".padStart(COLS.amount)} ${bold(acid(fmt(total).padStart(COLS.value)))}   ${muted(
+      notes > 0 ? `${sorted.length} pos · ${notes} note${notes === 1 ? "" : "s"}` : `${sorted.length} pos`,
+    )}`,
+  );
+  return total;
+}
+
+program
+  .command("portfolio")
+  .description("show your full portfolio: public on-chain holdings and your shielded balance")
+  .option("-p, --public", "public on-chain holdings only")
+  .option("-s, --shielded", "shielded holdings only")
+  .action(async (opts: { public?: boolean; shielded?: boolean }) => {
+    const { net, json } = ctx();
+    const sym = net.currency.symbol;
+    const showPublic = !(opts.shielded && !opts.public);
+    const showShielded = !(opts.public && !opts.shielded);
+
+    const address = requireWallet();
+    const keys = showShielded ? await shieldedKeys() : null;
+
+    // ---- public (on-chain) ----
+    let publicRows: PortfolioRow[] = [];
+    if (showPublic) {
+      const s = json ? null : p.spinner();
+      s?.start(`Reading ${net.label}`);
+      try {
+        const tokens = trackedTokens(loadConfig());
+        const [wei, tokenReads] = await Promise.all([
+          publicClient(net).getBalance({ address }),
+          Promise.all(
+            tokens.map((t) =>
+              tokenInfo(net, t as Address, address).then(
+                (r) => ({ ...r, address: t }),
+                () => null,
+              ),
+            ),
+          ),
+        ]);
+        s?.stop(net.label);
+        publicRows = [{ symbol: sym, amount: wei, value: valueOf(sym, wei) }];
+        for (const t of tokenReads) {
+          if (!t || t.raw === 0n) continue;
+          const amount = toWad(t.raw, t.decimals);
+          publicRows.push({ symbol: t.symbol, amount, value: valueOf(t.symbol, amount) });
+        }
+      } catch (e) {
+        s?.stop("failed");
+        die((e as Error).message);
+      }
+    }
+
+    // ---- shielded (local notes) ----
+    let shieldedRows: PortfolioRow[] = [];
+    if (showShielded && keys) {
+      shieldedRows = poolBalance(net.key, keys).map((b) => {
+        const symbol = tokenLabel(b.token, sym);
+        return { symbol, amount: b.amount, value: valueOf(symbol, b.amount), notes: b.notes };
+      });
+    }
+
+    if (json) {
+      const pack = (rows: PortfolioRow[]) =>
+        sortByValue(rows).map((r) => ({
+          symbol: r.symbol,
+          amount: formatEther(r.amount),
+          value: r.value === null ? null : formatEther(r.value),
+          ...(r.notes === undefined ? {} : { notes: r.notes }),
+        }));
+      const pubTotal = publicRows.reduce((s, r) => s + (r.value ?? 0n), 0n);
+      const shTotal = shieldedRows.reduce((s, r) => s + (r.value ?? 0n), 0n);
+      console.log(
+        JSON.stringify(
+          {
+            quote: QUOTE_SYMBOL,
+            public: showPublic ? { total: formatEther(pubTotal), positions: pack(publicRows) } : undefined,
+            shielded: showShielded ? { total: formatEther(shTotal), positions: pack(shieldedRows) } : undefined,
+            total: formatEther(pubTotal + shTotal),
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
+
+    let pubTotal = 0n;
+    let shTotal = 0n;
+    if (showPublic) {
+      pubTotal = renderSection(
+        `Public · ${net.label}`,
+        "visible to anyone on the explorer",
+        publicRows,
+        `Nothing here. Track tokens with ${"cowl token add <address>"}`,
+      );
+    }
+    if (showShielded) {
+      shTotal = renderSection(
+        "Shielded",
+        "private, computed from your notes",
+        shieldedRows,
+        "Empty. Fund it with cowl shield <amount> [token]",
+      );
+    }
+
+    if (showPublic && showShielded) {
+      const total = pubTotal + shTotal;
+      const pct = total > 0n ? Number((shTotal * 10000n) / total) / 100 : 0;
+      heading("Total");
+      row("Portfolio", `${bold(acid(fmt(total)))} ${muted(QUOTE_SYMBOL)}`);
+      row("Shielded", `${bold(`${pct.toFixed(1)}%`)} ${muted("of your book is off the explorer")}`);
+    }
+    if (showShielded) localNotice(net);
+  });
+
+// ---- tracked tokens ---------------------------------------------------------
+
+const token = program.command("token").description("ERC-20 tokens tracked in your portfolio");
+
+token
+  .command("list", { isDefault: true })
+  .description("list tracked tokens")
+  .action(() => {
+    const { net, json } = ctx();
+    const tokens = trackedTokens(loadConfig());
+    out(json, { network: net.key, tokens }, () => {
+      heading(`Tracked tokens · ${net.label}`);
+      if (tokens.length === 0) {
+        console.log(`  ${dim("None. Add one:")} ${dim("cowl token add 0x…")}`);
+        return;
+      }
+      for (const t of tokens) console.log(`  ${symbols.dot()} ${muted(t)}`);
+    });
+  });
+
+token
+  .command("add")
+  .description("track an ERC-20 token in your portfolio")
+  .argument("<address>", "ERC-20 contract address")
+  .action(async (address: string) => {
+    const { net } = ctx();
+    if (!isAddress(address)) die("Invalid token address.");
+    const owner = keystoreAddress();
+    const s = p.spinner();
+    s.start("Reading token");
+    try {
+      const info = await tokenInfo(net, address as Address, (owner ?? address) as Address);
+      s.stop(info.symbol);
+      saveConfig(addTrackedToken(loadConfig(), address));
+      ok(`Tracking ${acid(info.symbol)} ${muted(address)}`);
+    } catch (e) {
+      s.stop("failed");
+      die(`Could not read that token on ${net.label}.`, (e as Error).message);
+    }
+  });
+
+token
+  .command("remove")
+  .description("stop tracking a token")
+  .argument("<address>", "ERC-20 contract address")
+  .action((address: string) => {
+    saveConfig(removeTrackedToken(loadConfig(), address));
+    ok(`Removed ${muted(address)}`);
   });
 
 program

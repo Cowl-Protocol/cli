@@ -86,6 +86,21 @@ export async function nativeBalance(net: NetworkDef, address: Address): Promise<
   return formatEther(wei);
 }
 
+/** Full ERC-20 read: raw balance plus the metadata needed to value it. */
+export async function tokenInfo(
+  net: NetworkDef,
+  token: Address,
+  address: Address,
+): Promise<{ raw: bigint; decimals: number; symbol: string }> {
+  const client = publicClient(net);
+  const [raw, decimals, symbol] = await Promise.all([
+    client.readContract({ address: token, abi: ERC20_ABI, functionName: "balanceOf", args: [address] }),
+    client.readContract({ address: token, abi: ERC20_ABI, functionName: "decimals" }),
+    client.readContract({ address: token, abi: ERC20_ABI, functionName: "symbol" }),
+  ]);
+  return { raw, decimals, symbol };
+}
+
 export async function tokenBalance(
   net: NetworkDef,
   token: Address,

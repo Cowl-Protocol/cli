@@ -4,12 +4,18 @@
 // them for the real Robinhood Chain token addresses once the pool deploys.
 export type TokenInfo = { symbol: string; field: bigint; decimals: number };
 
+const sentinel = (n: number) => BigInt("0x" + n.toString(16).padStart(40, "0"));
+
 const LIST: TokenInfo[] = [
   { symbol: "ETH", field: 0n, decimals: 18 },
-  { symbol: "USDG", field: BigInt("0x0000000000000000000000000000000000001111"), decimals: 18 },
-  { symbol: "TSLA", field: BigInt("0x0000000000000000000000000000000000002222"), decimals: 18 },
-  { symbol: "AAPL", field: BigInt("0x0000000000000000000000000000000000003333"), decimals: 18 },
-  { symbol: "NVDA", field: BigInt("0x0000000000000000000000000000000000004444"), decimals: 18 },
+  { symbol: "USDG", field: sentinel(0x1111), decimals: 18 },
+  { symbol: "TSLA", field: sentinel(0x2222), decimals: 18 },
+  { symbol: "AAPL", field: sentinel(0x3333), decimals: 18 },
+  { symbol: "NVDA", field: sentinel(0x4444), decimals: 18 },
+  { symbol: "AMZN", field: sentinel(0x5555), decimals: 18 },
+  { symbol: "NFLX", field: sentinel(0x6666), decimals: 18 },
+  { symbol: "PLTR", field: sentinel(0x7777), decimals: 18 },
+  { symbol: "AMD", field: sentinel(0x8888), decimals: 18 },
 ];
 
 export const TOKENS_BY_SYMBOL = new Map(LIST.map((t) => [t.symbol, t] as const));

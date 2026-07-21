@@ -7,7 +7,11 @@ export type Config = {
   // Per-network overrides keyed by network key.
   overrides: Record<
     string,
-    Partial<Pick<NetworkDef, "rpcUrl" | "chainId" | "explorer">> & { contracts?: CowlContracts }
+    Partial<Pick<NetworkDef, "rpcUrl" | "chainId" | "explorer">> & {
+      contracts?: CowlContracts;
+      /** ERC-20 addresses to include in `cowl portfolio`. */
+      tokens?: string[];
+    }
   >;
 };
 
@@ -50,6 +54,28 @@ export function activeNetwork(cfg: Config): NetworkDef {
     ...(ov.explorer !== undefined ? { explorer: ov.explorer } : {}),
     contracts: { ...base.contracts, ...(ov.contracts ?? {}) },
   };
+}
+
+/** ERC-20 addresses tracked in the portfolio for the active network. */
+export function trackedTokens(cfg: Config): string[] {
+  return cfg.overrides[cfg.network]?.tokens ?? [];
+}
+
+export function addTrackedToken(cfg: Config, address: string): Config {
+  const netKey = cfg.network;
+  const ov = { ...(cfg.overrides[netKey] ?? {}) };
+  const lower = address.toLowerCase();
+  const list = (ov.tokens ?? []).filter((t) => t.toLowerCase() !== lower);
+  ov.tokens = [...list, address];
+  return { ...cfg, overrides: { ...cfg.overrides, [netKey]: ov } };
+}
+
+export function removeTrackedToken(cfg: Config, address: string): Config {
+  const netKey = cfg.network;
+  const ov = { ...(cfg.overrides[netKey] ?? {}) };
+  const lower = address.toLowerCase();
+  ov.tokens = (ov.tokens ?? []).filter((t) => t.toLowerCase() !== lower);
+  return { ...cfg, overrides: { ...cfg.overrides, [netKey]: ov } };
 }
 
 /** Apply a dotted-path set like `network.rpcUrl` or `contracts.pool`. */
