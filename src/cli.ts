@@ -1157,9 +1157,13 @@ program
         JSON.stringify(
           {
             quote: QUOTE_SYMBOL,
+            poolDeployed: !!net.contracts.pool,
             public: showPublic ? { total: formatEther(pubTotal), positions: pack(publicRows) } : undefined,
-            shielded: showShielded ? { total: formatEther(shTotal), positions: pack(shieldedRows) } : undefined,
-            total: formatEther(pubTotal + shTotal),
+            shielded: showShielded
+              ? { total: formatEther(shTotal), simulated: !net.contracts.pool, positions: pack(shieldedRows) }
+              : undefined,
+            // Only one book once the pool exists; before that, summing double counts.
+            total: net.contracts.pool ? formatEther(pubTotal + shTotal) : null,
           },
           null,
           2,
@@ -1188,11 +1192,24 @@ program
     }
 
     if (showPublic && showShielded) {
-      const total = pubTotal + shTotal;
-      const pct = total > 0n ? Number((shTotal * 10000n) / total) / 100 : 0;
       heading("Total");
-      row("Portfolio", `${bold(acid(fmt(total)))} ${muted(QUOTE_SYMBOL)}`);
-      row("Shielded", `${bold(`${pct.toFixed(1)}%`)} ${muted("of your book is off the explorer")}`);
+      if (net.contracts.pool) {
+        // Shielding moved real funds, so the two sides are one book.
+        const total = pubTotal + shTotal;
+        const pct = total > 0n ? Number((shTotal * 10000n) / total) / 100 : 0;
+        row("Portfolio", `${bold(acid(fmt(total)))} ${muted(QUOTE_SYMBOL)}`);
+        row("Shielded", `${bold(`${pct.toFixed(1)}%`)} ${muted("of your book is off the explorer")}`);
+      } else {
+        // No pool contract: shielding never left the machine, so the public side
+        // still holds the same coins. Adding these would count them twice.
+        row("Public", `${bold(acid(fmt(pubTotal)))} ${muted(QUOTE_SYMBOL)}`);
+        row("Shielded", `${bold(acid(fmt(shTotal)))} ${muted(`${QUOTE_SYMBOL} · simulated`)}`);
+        console.log(
+          `\n  ${warnMark()} ${muted(
+            "Not one book yet. Shielding is local until the pool deploys, so nothing was deducted from your public holdings and these two cannot be summed.",
+          )}`,
+        );
+      }
     }
     if (showShielded) localNotice(net);
   });
