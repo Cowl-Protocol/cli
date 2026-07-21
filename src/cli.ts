@@ -588,7 +588,12 @@ const config = program.command("config").description("read or write configuratio
 config
   .command("path")
   .description("print the config file path")
-  .action(() => console.log(CONFIG_PATH));
+  // Home is collapsed to ~ by default so screenshots and recordings do not leak
+  // the account name. Scripts that need to open the file pass --absolute.
+  .option("-a, --absolute", "print the full path, including your home directory")
+  .action((opts: { absolute?: boolean }) => {
+    console.log(opts.absolute ? CONFIG_PATH : displayPath(CONFIG_PATH));
+  });
 
 config
   .command("show", { isDefault: true })
