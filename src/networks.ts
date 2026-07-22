@@ -3,6 +3,12 @@ import type { Chain } from "viem";
 export type CowlContracts = {
   /** Shielded pool contract — deposits, private trades, withdrawals. */
   pool?: `0x${string}`;
+  /**
+   * Block the pool was deployed in. Commitments live in the event log rather than
+   * contract storage, so rebuilding the tree means replaying NoteCommitted — and
+   * without a floor that replay starts at genesis, which public RPCs refuse.
+   */
+  poolDeployBlock?: bigint;
   /** Gasless relayer entrypoint. */
   relayer?: `0x${string}`;
   /** $COWL staking contract. */
@@ -35,7 +41,9 @@ export const NETWORKS: Record<string, NetworkDef> = {
     explorer: "https://explorer.testnet.chain.robinhood.com",
     currency: { name: "Ether", symbol: "ETH", decimals: 18 },
     testnet: true,
-    contracts: {},
+    // Deployed 2026-07-22. The pool is deposit-only for now: `shield` proves and
+    // settles on chain, everything else still runs against the local tree.
+    contracts: { pool: "0x5DE68a552cf7CcE72d4CC7C1918278B42171809b", poolDeployBlock: 92184357n },
   },
   "robinhood-mainnet": {
     key: "robinhood-mainnet",
