@@ -41,21 +41,11 @@ export const NETWORKS: Record<string, NetworkDef> = {
     explorer: "https://explorer.testnet.chain.robinhood.com",
     currency: { name: "Ether", symbol: "ETH", decimals: 18 },
     testnet: true,
-    // STALE — redeploy before using. This instance predates both the event change
-    // (NoteCommitted lost token+value, so its topic hash moved and this client
-    // decodes zero leaves while the contract reports 2) and the on-chain root, so
-    // its constructor takes one verifier where the current pool takes two.
-    //
-    // Both verifiers must be new as well: the shield circuit now proves its own
-    // insertion, so the deployed ShieldVerifier holds a verifying key for a
-    // circuit that no longer exists. Deploy everything fresh, then put the new
-    // address and the printed deployBlock here:
-    //
-    //   forge script script/Deploy.s.sol \
-    //     --rpc-url https://46630.rpc.thirdweb.com --account cowl-deployer --broadcast
-    //
-    // The two smoke-test leaves on the old pool are not worth migrating.
-    contracts: { pool: "0x5DE68a552cf7CcE72d4CC7C1918278B42171809b", poolDeployBlock: 92184357n },
+    // Redeployed 2026-07-22 with the NoteCipher event and the join-split spend
+    // surface. The pool holds its two verifiers as immutables (ShieldVerifier
+    // 0xB75c5659…0ba9, TransferVerifier 0x349B4c13…cE75), so only the pool address
+    // and its deploy block live here; redeploy all three if a circuit ever changes.
+    contracts: { pool: "0x3c60dB74dBEd90c960F6ce54C1b0c8ae84Ccca2C", poolDeployBlock: 92335340n },
   },
   "robinhood-mainnet": {
     key: "robinhood-mainnet",
