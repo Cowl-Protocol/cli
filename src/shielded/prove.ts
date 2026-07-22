@@ -24,9 +24,10 @@
 // imports to the top of dist/cli.mjs, which would make every command — including
 // `cowl --version` — pay to load the proving stack. Dynamic import of an external
 // survives bundling untouched, so only a real proof loads the WASM.
-import { SHIELD_CIRCUIT } from "./circuit.js";
-import { fieldToHex } from "./field.js";
-import type { Note } from "./note.js";
+import { SHIELD_CIRCUIT, TRANSFER_CIRCUIT } from "./circuit.js";
+import { fieldToHex, poseidon, randomField } from "./field.js";
+import { commitment, nullifier, type Note } from "./note.js";
+import { appendProof, computeRoot, merkleProof } from "./tree.js";
 
 /**
  * Structured reference string to load, in G1 points.
@@ -104,6 +105,183 @@ export async function proveShield(
     return {
       proof: `0x${Buffer.from(proof).toString("hex")}`,
       publicInputs: publicInputs.map(pad32),
+    };
+  } finally {
+    await api.destroy();
+  }
+}
+
+/** One note being spent, already sitting in the tree at `leafIndex`. */
+export type SpendInput = { value: bigint; blinding: bigint; leafIndex: number };
+/** One note being created. `mpk` is its owner — the recipient's for a payment, yours for change. */
+export type SpendOutput = { mpk: bigint; value: bigint; blinding: bigint };
+
+export type SpendPlan = {
+  sk: bigint;
+  nk: bigint;
+  /** The asset the notes hold. Private — it surfaces only through publicToken, when value leaves. */
+  token: bigint;
+  /** One or two notes to spend. A single-note spend is padded with a zero-value dummy. */
+  inputs: SpendInput[];
+  /** Exactly two outputs, in order. Either may be a zero-value filler. */
+  outputs: [SpendOutput, SpendOutput];
+  /** Every commitment currently in the tree; membership and the append paths derive from it. */
+  leaves: bigint[];
+  /** The public leg. All zero (value + fee) means nothing leaves and this is a pure private spend. */
+  publicToken: bigint;
+  publicValue: bigint;
+  fee: bigint;
+  /** Payout targets as address-fields; 0 when that leg is unused. */
+  recipient: bigint;
+  relayer: bigint;
+};
+
+/** The subset of a proof that ShieldedPool.spend's Spend struct consumes. */
+export type SpendStruct = {
+  membershipRoot: `0x${string}`;
+  nullifiers: readonly [`0x${string}`, `0x${string}`];
+  commitments: readonly [`0x${string}`, `0x${string}`];
+  newRoot: `0x${string}`;
+  token: bigint;
+  value: bigint;
+  fee: bigint;
+  recipient: bigint;
+  relayer: bigint;
+};
+
+export type SpendProof = {
+  /** UltraHonk proof bytes, passed straight to ShieldedPool.spend(). */
+  proof: `0x${string}`;
+  /** All 13 public inputs, in the order spend() rebuilds them — kept for cross-checks. */
+  publicInputs: readonly `0x${string}`[];
+  /** Everything spend()'s Spend struct needs, already derived from the same witness. */
+  spend: SpendStruct;
+  /** Leaf index the first output lands at; the second is insertIndex + 1. */
+  insertIndex: number;
+};
+
+/** fieldToHex is 0x-prefixed and 32 bytes by construction; tell the type system so. */
+const hx = (x: bigint): `0x${string}` => fieldToHex(x) as `0x${string}`;
+
+/**
+ * Prove a join-split: up to two input notes are nullified and two outputs are
+ * appended, with an optional public leg leaving the pool. The witness mirrors
+ * circuits/fixtures.mjs exactly — the fixture that ShieldedPool.t.sol verifies —
+ * so a drift here fails a contract test rather than a live spend.
+ *
+ * `plan.leaves` must be the tree as the chain holds it right now: membership is
+ * proven against it and the outputs append to it, so sync immediately before
+ * proving and treat a revert as "someone spent first" — reprove against the new root.
+ */
+export async function proveTransfer(plan: SpendPlan): Promise<SpendProof> {
+  if (plan.inputs.length < 1 || plan.inputs.length > 2) {
+    throw new Error(`A join-split takes one or two input notes, got ${plan.inputs.length}.`);
+  }
+  // The tree the inputs sit under is also the root the outputs append to.
+  const membershipRoot = computeRoot(plan.leaves);
+  const insertIndex = plan.leaves.length;
+
+  const inValue: bigint[] = [];
+  const inBlinding: bigint[] = [];
+  const inLeafIndex: bigint[] = [];
+  const inPath: bigint[][] = [];
+  const inRight: boolean[][] = [];
+  const nullifiers: bigint[] = [];
+  for (let i = 0; i < 2; i++) {
+    const real = plan.inputs[i];
+    if (real) {
+      const mp = merkleProof(plan.leaves, real.leafIndex);
+      inValue.push(real.value);
+      inBlinding.push(real.blinding);
+      inLeafIndex.push(BigInt(real.leafIndex));
+      inPath.push(mp.pathElements);
+      inRight.push(mp.pathIndices.map((b) => b === 1));
+      nullifiers.push(nullifier(plan.nk, real.leafIndex));
+    } else {
+      // A zero-value dummy. The circuit waives its membership and leaf-index checks,
+      // so the index only has to land outside the 0..2^20 real range — a random field
+      // does — and be fresh each spend, or a fixed dummy nullifier would collide with
+      // an earlier spend's and revert AlreadySpent. Its path only has to be well-formed.
+      const dummyIndex = randomField();
+      const shape = merkleProof(plan.leaves, plan.inputs[0]!.leafIndex);
+      inValue.push(0n);
+      inBlinding.push(randomField());
+      inLeafIndex.push(dummyIndex);
+      inPath.push(shape.pathElements);
+      inRight.push(shape.pathIndices.map((b) => b === 1));
+      nullifiers.push(poseidon([plan.nk, dummyIndex]));
+    }
+  }
+
+  const outCommitments = plan.outputs.map((o) =>
+    commitment({ mpk: o.mpk, token: plan.token, value: o.value, blinding: o.blinding }),
+  );
+  // Chained appends: the second output lands on the tree the first one produced.
+  const append1 = appendProof(plan.leaves, outCommitments[0]!);
+  const append2 = appendProof([...plan.leaves, outCommitments[0]!], outCommitments[1]!);
+  const newRoot = append2.newRoot;
+
+  const input = {
+    sk: fieldToHex(plan.sk),
+    token: fieldToHex(plan.token),
+    in_value: inValue.map(fieldToHex),
+    in_blinding: inBlinding.map(fieldToHex),
+    in_leaf_index: inLeafIndex.map(fieldToHex),
+    in_path: inPath.map((p) => p.map(fieldToHex)),
+    in_right: inRight,
+    out_mpk: plan.outputs.map((o) => fieldToHex(o.mpk)),
+    out_value: plan.outputs.map((o) => fieldToHex(o.value)),
+    out_blinding: plan.outputs.map((o) => fieldToHex(o.blinding)),
+    out_path: [append1.pathElements.map(fieldToHex), append2.pathElements.map(fieldToHex)],
+    out_right: [append1.right, append2.right],
+    membership_root: fieldToHex(membershipRoot),
+    nullifiers: nullifiers.map(fieldToHex),
+    out_commitments: outCommitments.map(fieldToHex),
+    old_root: fieldToHex(membershipRoot),
+    new_root: fieldToHex(newRoot),
+    insert_index: fieldToHex(BigInt(insertIndex)),
+    public_token: fieldToHex(plan.publicToken),
+    public_value: fieldToHex(plan.publicValue),
+    fee: fieldToHex(plan.fee),
+    recipient: fieldToHex(plan.recipient),
+    relayer: fieldToHex(plan.relayer),
+  };
+
+  const [{ UltraHonkBackend, Barretenberg, BackendType }, { Noir }] = await Promise.all([
+    import("@aztec/bb.js"),
+    import("@noir-lang/noir_js"),
+  ]);
+  const noir = new Noir(TRANSFER_CIRCUIT as never);
+  const { witness } = await noir.execute(input);
+
+  const api = await Barretenberg.new({
+    backend: BackendType.Wasm,
+    threads: proverThreads(),
+    srsSize: SRS_SIZE,
+  });
+  try {
+    const backend = new UltraHonkBackend(TRANSFER_CIRCUIT.bytecode, api);
+    const { proof, publicInputs } = await quietly(() =>
+      backend.generateProof(witness, { verifierTarget: "evm" }),
+    );
+    if (publicInputs.length !== 13) {
+      throw new Error(`expected 13 public inputs, got ${publicInputs.length}`);
+    }
+    return {
+      proof: `0x${Buffer.from(proof).toString("hex")}`,
+      publicInputs: publicInputs.map(pad32),
+      spend: {
+        membershipRoot: hx(membershipRoot),
+        nullifiers: [hx(nullifiers[0]!), hx(nullifiers[1]!)],
+        commitments: [hx(outCommitments[0]!), hx(outCommitments[1]!)],
+        newRoot: hx(newRoot),
+        token: plan.publicToken,
+        value: plan.publicValue,
+        fee: plan.fee,
+        recipient: plan.recipient,
+        relayer: plan.relayer,
+      },
+      insertIndex,
     };
   } finally {
     await api.destroy();

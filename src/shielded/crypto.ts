@@ -86,5 +86,39 @@ export function tryDecryptNote(
   }
 }
 
+// The note ciphertext, packed for the chain. ShieldedPool emits a NoteCipher of a
+// fixed 158 bytes, laid out eph(33) + iv(12) + ct(96) + tag(16) + viewTag(1).
+// Fixed width is deliberate: a variable length would leak a note's magnitude the
+// way an unpadded payload once did, so the pool enforces exactly this size.
+export const NOTE_CIPHER_BYTES = 158;
+
+export function packCipher(c: NoteCipher): `0x${string}` {
+  const blob = Buffer.concat([
+    Buffer.from(c.eph, "hex"), // 33  ephemeral compressed pubkey
+    Buffer.from(c.iv, "hex"), //  12  AES-GCM iv
+    Buffer.from(c.ct, "hex"), //  96  ciphertext (== payload length)
+    Buffer.from(c.tag, "hex"), // 16  AES-GCM auth tag
+    Buffer.from(c.vt, "hex"), //   1  view tag
+  ]);
+  if (blob.length !== NOTE_CIPHER_BYTES) {
+    throw new Error(`Packed note cipher is ${blob.length} bytes, expected ${NOTE_CIPHER_BYTES}.`);
+  }
+  return `0x${blob.toString("hex")}`;
+}
+
+export function unpackCipher(hex: string): NoteCipher {
+  const b = Buffer.from(hex.replace(/^0x/, ""), "hex");
+  if (b.length !== NOTE_CIPHER_BYTES) {
+    throw new Error(`On-chain note cipher is ${b.length} bytes, expected ${NOTE_CIPHER_BYTES}.`);
+  }
+  return {
+    eph: b.subarray(0, 33).toString("hex"),
+    iv: b.subarray(33, 45).toString("hex"),
+    ct: b.subarray(45, 141).toString("hex"),
+    tag: b.subarray(141, 157).toString("hex"),
+    vt: b.subarray(157, 158).toString("hex"),
+  };
+}
+
 // Re-exported for callers that only need the byte helpers.
 export { bytesToHex, hexToBytes };
