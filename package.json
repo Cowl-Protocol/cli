@@ -1,7 +1,7 @@
 {
   "name": "@cowlprotocol/cli",
   "version": "0.2.8",
-  "description": "Cowl Protocol CLI — private trading on Robinhood Chain from your terminal. Shielded pool, private trades, stealth addresses, view keys, and gasless relayer.",
+  "description": "Cowl Protocol CLI \u2014 private trading on Robinhood Chain from your terminal. Shielded pool, private trades, stealth addresses, view keys, and gasless relayer.",
   "type": "module",
   "bin": {
     "cowl": "./dist/cli.mjs"
@@ -45,9 +45,11 @@
     "url": "https://github.com/Cowl-Protocol/cli/issues"
   },
   "dependencies": {
+    "@aztec/bb.js": "5.0.0-nightly.20260522",
     "@clack/prompts": "^0.7.0",
     "@noble/curves": "^1.4.0",
     "@noble/hashes": "^1.4.0",
+    "@noir-lang/noir_js": "1.0.0-beta.22",
     "@zkpassport/poseidon2": "^0.6.2",
     "commander": "^12.1.0",
     "picocolors": "^1.0.1",

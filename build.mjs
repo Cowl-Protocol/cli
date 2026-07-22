@@ -16,6 +16,12 @@ await build({
   target: "node18",
   minify: true,
   sourcemap: false,
+  // The proving stack stays out of the bundle. Both packages load assets from disk
+  // relative to their own location — a 10MB .wasm for Barretenberg, the ACVM and
+  // ABI wasm for Noir — plus worker threads, none of which survive being inlined
+  // into a single file. They are runtime dependencies, so npm puts them beside the
+  // CLI and Node resolves them normally.
+  external: ["@aztec/bb.js", "@noir-lang/noir_js"],
   define: {
     "process.env.COWL_VERSION": JSON.stringify(pkg.version),
   },
