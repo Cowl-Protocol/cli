@@ -66,6 +66,14 @@ contract ShieldedPool {
     bytes32 public constant EMPTY_ROOT =
         0x1c8c3ca0b3a3d75850fcd4dc7bf1e3445cd0cfff3ca510630fd90b47e8a24755;
 
+    /// A published note ciphertext is fixed-width. A variable length would leak
+    /// the way an unpadded payload once did — a wider blob for a larger note
+    /// (see the padding note in cli/src/shielded/crypto.ts) — so every one is
+    /// exactly these bytes, concatenated:
+    ///   eph(33) + iv(12) + ct(96) + tag(16) + viewTag(1) = 158
+    /// The pool never looks inside; the width is all it checks.
+    uint256 public constant NOTE_CIPHER_LEN = 158;
+
     IVerifier public immutable shieldVerifier;
     IVerifier public immutable transferVerifier;
 
@@ -87,6 +95,10 @@ contract ShieldedPool {
     /// repeating them here bought nothing and left a permanently indexed record
     /// beside the commitment for a later spend to be joined against.
     event NoteCommitted(bytes32 indexed commitment, uint32 leafIndex);
+    /// The encrypted output note, relayed so its recipient can find it. Opaque
+    /// to the pool — it never decrypts, it only carries the bytes to whoever
+    /// holds the view key. Paired with its commitment by leaf index.
+    event NoteCipher(uint32 leafIndex, bytes ciphertext);
     event Nullified(bytes32 indexed nullifier);
 
     error DuplicateCommitment();
@@ -100,6 +112,7 @@ contract ShieldedPool {
     error AlreadySpent();
     error RepeatedNullifier();
     error NoRecipient();
+    error BadCipherLength();
 
     constructor(IVerifier _shieldVerifier, IVerifier _transferVerifier) {
         shieldVerifier = _shieldVerifier;
@@ -115,9 +128,11 @@ contract ShieldedPool {
         uint256 value,
         bytes32 commitment,
         bytes32 newRoot,
+        bytes calldata ciphertext,
         bytes calldata proof
     ) external payable {
         if (value == 0) revert ZeroValue();
+        if (ciphertext.length != NOTE_CIPHER_LEN) revert BadCipherLength();
         if (value >= FR || uint256(commitment) >= FR || uint256(newRoot) >= FR) revert NotAField();
         // Non-native token ids are ERC-20 addresses; anything wider would
         // silently truncate in the uint160 cast below while the proof commits
@@ -152,6 +167,7 @@ contract ShieldedPool {
         }
 
         emit NoteCommitted(commitment, leafIndex);
+        emit NoteCipher(leafIndex, ciphertext);
     }
 
     /// A join-split. `membershipRoot` is any remembered root the input notes sit
@@ -173,7 +189,7 @@ contract ShieldedPool {
         address relayer;
     }
 
-    function spend(Spend calldata s, bytes calldata proof) external {
+    function spend(Spend calldata s, bytes[2] calldata ciphertexts, bytes calldata proof) external {
         if (!knownRoot[s.membershipRoot]) revert UnknownRoot();
         if (s.nullifiers[0] == s.nullifiers[1]) revert RepeatedNullifier();
         if (nullifierSpent[s.nullifiers[0]] || nullifierSpent[s.nullifiers[1]]) revert AlreadySpent();
@@ -188,6 +204,9 @@ contract ShieldedPool {
         // has already accounted for as spent.
         if (s.value != 0 && s.recipient == address(0)) revert NoRecipient();
         if (s.fee != 0 && s.relayer == address(0)) revert NoRecipient();
+        if (ciphertexts[0].length != NOTE_CIPHER_LEN || ciphertexts[1].length != NOTE_CIPHER_LEN) {
+            revert BadCipherLength();
+        }
 
         uint32 insertIndex = nextLeafIndex;
         bytes32 oldRoot = root;
@@ -220,7 +239,9 @@ contract ShieldedPool {
         emit Nullified(s.nullifiers[0]);
         emit Nullified(s.nullifiers[1]);
         emit NoteCommitted(s.commitments[0], insertIndex);
+        emit NoteCipher(insertIndex, ciphertexts[0]);
         emit NoteCommitted(s.commitments[1], insertIndex + 1);
+        emit NoteCipher(insertIndex + 1, ciphertexts[1]);
 
         if (s.value != 0) _payOut(s.token, s.recipient, s.value);
         if (s.fee != 0) _payOut(s.token, s.relayer, s.fee);

@@ -6,6 +6,18 @@ import {ShieldedPool} from "../src/ShieldedPool.sol";
 import {IVerifier, ShieldVerifier} from "../src/ShieldVerifier.sol";
 import {TransferVerifier} from "../src/TransferVerifier.sol";
 
+/// A note ciphertext the pool will accept. It is opaque to the contract, so a
+/// blob of the right width is all these tests need — the width itself is what
+/// test_shield_rejects_a_wrong_length_cipher and its spend twin check.
+function okCipher() pure returns (bytes memory) {
+    return new bytes(158);
+}
+
+function okCiphers() pure returns (bytes[2] memory cts) {
+    cts[0] = okCipher();
+    cts[1] = okCipher();
+}
+
 contract MockVerifier is IVerifier {
     bool public result = true;
 
@@ -35,6 +47,7 @@ contract ShieldedPoolTest is Test {
     ShieldedPool pool;
 
     event NoteCommitted(bytes32 indexed commitment, uint32 leafIndex);
+    event NoteCipher(uint32 leafIndex, bytes ciphertext);
     event Nullified(bytes32 indexed nullifier);
 
     function setUp() public {
@@ -54,9 +67,12 @@ contract ShieldedPoolTest is Test {
     }
 
     function test_shield_native_commits_and_advances_the_root() public {
+        bytes memory cipher = okCipher();
         vm.expectEmit();
         emit NoteCommitted(_f("commitment"), 0);
-        pool.shield{value: 3}(0, 3, _f("commitment"), _f("root-1"), "");
+        vm.expectEmit();
+        emit NoteCipher(0, cipher);
+        pool.shield{value: 3}(0, 3, _f("commitment"), _f("root-1"), cipher, "");
 
         assertTrue(pool.committed(_f("commitment")));
         assertEq(pool.nextLeafIndex(), 1);
@@ -68,45 +84,50 @@ contract ShieldedPoolTest is Test {
     }
 
     function test_shield_rejects_duplicate_commitment() public {
-        pool.shield{value: 3}(0, 3, _f("commitment"), _f("root-1"), "");
+        pool.shield{value: 3}(0, 3, _f("commitment"), _f("root-1"), okCipher(), "");
         vm.expectRevert(ShieldedPool.DuplicateCommitment.selector);
-        pool.shield{value: 3}(0, 3, _f("commitment"), _f("root-2"), "");
+        pool.shield{value: 3}(0, 3, _f("commitment"), _f("root-2"), okCipher(), "");
     }
 
     function test_shield_rejects_wrong_native_amount() public {
         vm.expectRevert(ShieldedPool.WrongDeposit.selector);
-        pool.shield{value: 2}(0, 3, _f("commitment"), _f("root-1"), "");
+        pool.shield{value: 2}(0, 3, _f("commitment"), _f("root-1"), okCipher(), "");
     }
 
     function test_shield_rejects_invalid_proof() public {
         shieldVerifier.set(false);
         vm.expectRevert(ShieldedPool.InvalidProof.selector);
-        pool.shield{value: 3}(0, 3, _f("commitment"), _f("root-1"), "");
+        pool.shield{value: 3}(0, 3, _f("commitment"), _f("root-1"), okCipher(), "");
     }
 
     function test_shield_rejects_zero_value() public {
         vm.expectRevert(ShieldedPool.ZeroValue.selector);
-        pool.shield(0, 0, _f("commitment"), _f("root-1"), "");
+        pool.shield(0, 0, _f("commitment"), _f("root-1"), okCipher(), "");
+    }
+
+    function test_shield_rejects_a_wrong_length_cipher() public {
+        vm.expectRevert(ShieldedPool.BadCipherLength.selector);
+        pool.shield{value: 3}(0, 3, _f("commitment"), _f("root-1"), new bytes(157), "");
     }
 
     function test_shield_rejects_noncanonical_field() public {
         vm.expectRevert(ShieldedPool.NotAField.selector);
-        pool.shield{value: 0}(0, FR, _f("commitment"), _f("root-1"), "");
+        pool.shield{value: 0}(0, FR, _f("commitment"), _f("root-1"), okCipher(), "");
         vm.expectRevert(ShieldedPool.NotAField.selector);
-        pool.shield{value: 3}(0, 3, bytes32(FR), _f("root-1"), "");
+        pool.shield{value: 3}(0, 3, bytes32(FR), _f("root-1"), okCipher(), "");
         vm.expectRevert(ShieldedPool.NotAField.selector);
-        pool.shield{value: 3}(0, 3, _f("commitment"), bytes32(FR), "");
+        pool.shield{value: 3}(0, 3, _f("commitment"), bytes32(FR), okCipher(), "");
     }
 
     function test_shield_rejects_oversized_token_id() public {
         uint256 wide = (uint256(1) << 160) | 0x1111;
         vm.expectRevert(ShieldedPool.NotAField.selector);
-        pool.shield(wide, 3, _f("commitment"), _f("root-1"), "");
+        pool.shield(wide, 3, _f("commitment"), _f("root-1"), okCipher(), "");
     }
 
     function test_shield_rejects_eth_sent_with_erc20_deposit() public {
         vm.expectRevert(ShieldedPool.WrongDeposit.selector);
-        pool.shield{value: 3}(0x1111, 3, _f("commitment"), _f("root-1"), "");
+        pool.shield{value: 3}(0x1111, 3, _f("commitment"), _f("root-1"), okCipher(), "");
     }
 
     // -------------------------------------------------------------- spend ---
@@ -124,7 +145,7 @@ contract ShieldedPoolTest is Test {
     }
 
     function _fundedPool() internal returns (ShieldedPool.Spend memory s) {
-        pool.shield{value: 1000}(0, 1000, _f("commitment"), _f("root-1"), "");
+        pool.shield{value: 1000}(0, 1000, _f("commitment"), _f("root-1"), okCipher(), "");
         s = _spend();
     }
 
@@ -133,7 +154,7 @@ contract ShieldedPoolTest is Test {
 
         vm.expectEmit();
         emit Nullified(s.nullifiers[0]);
-        pool.spend(s, "");
+        pool.spend(s, okCiphers(), "");
 
         assertTrue(pool.nullifierSpent(s.nullifiers[0]));
         assertTrue(pool.nullifierSpent(s.nullifiers[1]));
@@ -145,11 +166,34 @@ contract ShieldedPoolTest is Test {
         assertEq(address(pool).balance, 700);
     }
 
+    /// Both outputs get a cipher, paired to their leaf. Emitting one per output —
+    /// including the change note back to the sender — is what keeps an observer
+    /// from telling the payment leg from the change leg by which one was
+    /// delivered.
+    function test_spend_emits_a_cipher_for_each_output() public {
+        ShieldedPool.Spend memory s = _fundedPool();
+        bytes[2] memory cts = okCiphers();
+        // leaf 0 was the deposit, so the two outputs land at 1 and 2.
+        vm.expectEmit();
+        emit Nullified(s.nullifiers[0]);
+        vm.expectEmit();
+        emit Nullified(s.nullifiers[1]);
+        vm.expectEmit();
+        emit NoteCommitted(s.commitments[0], 1);
+        vm.expectEmit();
+        emit NoteCipher(1, cts[0]);
+        vm.expectEmit();
+        emit NoteCommitted(s.commitments[1], 2);
+        vm.expectEmit();
+        emit NoteCipher(2, cts[1]);
+        pool.spend(s, cts, "");
+    }
+
     function test_spend_pays_nothing_when_the_legs_are_private() public {
         ShieldedPool.Spend memory s = _fundedPool();
         s.value = 0;
         s.fee = 0;
-        pool.spend(s, "");
+        pool.spend(s, okCiphers(), "");
         assertEq(address(pool).balance, 1000);
         assertEq(s.recipient.balance, 0);
     }
@@ -158,12 +202,12 @@ contract ShieldedPoolTest is Test {
         ShieldedPool.Spend memory s = _fundedPool();
         s.membershipRoot = _f("never");
         vm.expectRevert(ShieldedPool.UnknownRoot.selector);
-        pool.spend(s, "");
+        pool.spend(s, okCiphers(), "");
     }
 
     function test_spend_rejects_a_replayed_nullifier() public {
         ShieldedPool.Spend memory s = _fundedPool();
-        pool.spend(s, "");
+        pool.spend(s, okCiphers(), "");
 
         ShieldedPool.Spend memory again = _spend();
         again.membershipRoot = pool.root();
@@ -171,35 +215,44 @@ contract ShieldedPoolTest is Test {
         again.value = 0;
         again.fee = 0;
         vm.expectRevert(ShieldedPool.AlreadySpent.selector);
-        pool.spend(again, "");
+        pool.spend(again, okCiphers(), "");
     }
 
     function test_spend_rejects_the_same_nullifier_twice_in_one_tx() public {
         ShieldedPool.Spend memory s = _fundedPool();
         s.nullifiers[1] = s.nullifiers[0];
         vm.expectRevert(ShieldedPool.RepeatedNullifier.selector);
-        pool.spend(s, "");
+        pool.spend(s, okCiphers(), "");
     }
 
     function test_spend_rejects_a_commitment_already_in_the_tree() public {
         ShieldedPool.Spend memory s = _fundedPool();
         s.commitments[0] = _f("commitment");
         vm.expectRevert(ShieldedPool.DuplicateCommitment.selector);
-        pool.spend(s, "");
+        pool.spend(s, okCiphers(), "");
+    }
+
+    function test_spend_rejects_a_wrong_length_cipher() public {
+        ShieldedPool.Spend memory s = _fundedPool();
+        bytes[2] memory cts;
+        cts[0] = okCipher();
+        cts[1] = new bytes(1);
+        vm.expectRevert(ShieldedPool.BadCipherLength.selector);
+        pool.spend(s, cts, "");
     }
 
     function test_spend_rejects_a_payout_with_nowhere_to_go() public {
         ShieldedPool.Spend memory s = _fundedPool();
         s.recipient = address(0);
         vm.expectRevert(ShieldedPool.NoRecipient.selector);
-        pool.spend(s, "");
+        pool.spend(s, okCiphers(), "");
     }
 
     function test_spend_rejects_invalid_proof() public {
         ShieldedPool.Spend memory s = _fundedPool();
         transferVerifier.set(false);
         vm.expectRevert(ShieldedPool.InvalidProof.selector);
-        pool.spend(s, "");
+        pool.spend(s, okCiphers(), "");
     }
 
     /// History is a ring, so a note proven against a root older than the window
@@ -208,7 +261,7 @@ contract ShieldedPoolTest is Test {
         bytes32 first = pool.EMPTY_ROOT();
         uint32 span = pool.ROOT_HISTORY();
         for (uint256 i = 0; i < span; i++) {
-            pool.shield{value: 1}(0, 1, _f(string.concat("c", vm.toString(i))), _f(string.concat("r", vm.toString(i))), "");
+            pool.shield{value: 1}(0, 1, _f(string.concat("c", vm.toString(i))), _f(string.concat("r", vm.toString(i))), okCipher(), "");
         }
         assertFalse(pool.knownRoot(first));
         assertTrue(pool.knownRoot(pool.root()));
@@ -247,6 +300,7 @@ contract ShieldedPoolIntegrationTest is Test {
             uint256(shieldInputs[1]), // value
             shieldInputs[2], // commitment
             shieldInputs[4], // new root
+            okCipher(),
             shieldProof
         );
     }
@@ -279,7 +333,7 @@ contract ShieldedPoolIntegrationTest is Test {
         _deposit();
         ShieldedPool.Spend memory s = _spend();
 
-        pool.spend(s, spendProof);
+        pool.spend(s, okCiphers(), spendProof);
 
         assertEq(s.recipient.balance, 250);
         assertEq(s.relayer.balance, 50);
@@ -296,7 +350,7 @@ contract ShieldedPoolIntegrationTest is Test {
         // observer cannot re-point a pending unshield at themselves.
         s.recipient = address(0xBAD);
         vm.expectRevert();
-        pool.spend(s, spendProof);
+        pool.spend(s, okCiphers(), spendProof);
     }
 
     function test_spend_proof_cannot_inflate_its_payout() public {
@@ -304,7 +358,7 @@ contract ShieldedPoolIntegrationTest is Test {
         ShieldedPool.Spend memory s = _spend();
         s.value = 900;
         vm.expectRevert();
-        pool.spend(s, spendProof);
+        pool.spend(s, okCiphers(), spendProof);
     }
 
     function test_spend_cannot_run_before_the_deposit_it_spends() public {
@@ -312,17 +366,17 @@ contract ShieldedPoolIntegrationTest is Test {
         // membership root the proof names is unknown to it.
         ShieldedPool.Spend memory s = _spend();
         vm.expectRevert(ShieldedPool.UnknownRoot.selector);
-        pool.spend(s, spendProof);
+        pool.spend(s, okCiphers(), spendProof);
     }
 
     function test_real_proof_with_wrong_value_reverts() public {
         vm.expectRevert();
-        pool.shield{value: 1001}(0, 1001, shieldInputs[2], shieldInputs[4], shieldProof);
+        pool.shield{value: 1001}(0, 1001, shieldInputs[2], shieldInputs[4], okCipher(), shieldProof);
     }
 
     function test_garbage_proof_reverts() public {
         bytes memory garbage = new bytes(shieldProof.length);
         vm.expectRevert();
-        pool.shield{value: 1000}(0, 1000, shieldInputs[2], shieldInputs[4], garbage);
+        pool.shield{value: 1000}(0, 1000, shieldInputs[2], shieldInputs[4], okCipher(), garbage);
     }
 }
