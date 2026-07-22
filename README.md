@@ -244,12 +244,27 @@ cowl trade buy 240 NVDA-USDG    # spend 240 USDG, receive NVDA
 ```
 
 Pricing here is an indicative quote plus the protocol fee; real routing goes through an on-chain DEX
-adapter once the pool deploys.
+adapter once the trade circuit ships.
 
-The note format (Poseidon commitments and nullifiers over the BN254 field) is the exact witness the
-Noir circuits prove over. **Testnet-first:** until the pool contract deploys, these run against a
-local pool on your machine — the cryptography is real, but there is no on-chain transaction or
-settlement yet. Point a shared pool file with `COWL_POOL_DIR` to try a multi-party flow locally.
+### What settles on chain, and what does not
+
+The note format (Poseidon2 commitments and nullifiers over the BN254 field) is the exact witness the
+Noir circuits prove over. On networks where the pool contract is deployed:
+
+**`cowl shield` is real.** It generates an UltraHonk proof on your machine — no toolchain to
+install, the prover ships with the CLI — sends it to the pool contract, and the deposit settles on
+chain. Your leaf index comes from the contract, and `balance --shielded`, `portfolio` and `scan`
+rebuild the commitment tree from the pool's event log.
+
+**`unshield`, private `send` and `trade` are not live there yet.** Their circuits have not
+shipped, and simulating a spend on top of a real ledger would corrupt it — a simulated nullifier
+would pin a real on-chain note as spent, and the simulation's output note would vanish on the next
+sync because the chain never saw it. So on pool networks those commands say so and exit instead of
+pretending. Your notes hold value on chain and unlock the moment the spend circuits land.
+
+On networks with no pool contract, the full flow — shield, send, trade, unshield — runs as a local
+simulation: the cryptography is real and value is conserved, but nothing settles. Point a shared
+pool file with `COWL_POOL_DIR` to try a multi-party flow locally.
 
 ```bash
 cowl stake <amount>             # stake $COWL (lights up when the staking contract deploys)
@@ -265,7 +280,7 @@ cowl stake <amount>             # stake $COWL (lights up when the staking contra
   viewkey.json      # ed25519 view key    (mode 0600)
   config.json       # network + overrides (mode 0600)
   shielded/
-    pool-<net>.json   # local shielded-pool ledger (commitments, nullifiers)
+    pool-<net>.json   # shielded-pool ledger (commitments, nullifiers, sync cursor)
     notes-<net>.json  # your discovered notes
 ```
 

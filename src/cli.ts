@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import * as p from "@clack/prompts";
-import { isAddress, parseEther, formatEther, type Address } from "viem";
+import { isAddress, parseEther, parseUnits, formatEther, type Address } from "viem";
 import {
   acid,
   bone,
@@ -188,25 +188,84 @@ async function shieldedKeys(): Promise<ShieldedKeys> {
   return deriveShieldedKeys(pk);
 }
 
-/** Until the pool contract deploys, shielded ops are a local, off-chain simulation. */
-function localNotice(net: NetworkDef): void {
-  if (net.contracts.pool) return;
+/**
+ * Honesty marker for shielded state that is not (fully) on chain. On a pool
+ * network the balance itself is chain-synced, but the reader deserves to know
+ * their notes cannot move yet; on a sim-only network everything shown is local.
+ * Silence in either spot would let a simulation pass as real.
+ */
+function localNotice(net: NetworkDef, kind: "op" | "view" = "op"): void {
+  void kind; // op-flavored sims cannot happen on pool networks — spends are gated
+  if (net.contracts.pool) {
+    console.log(
+      `\n  ${warnMark()} ${muted("Deposits settle on")} ${bone(net.label)} ${muted("— unshield, private send and trade unlock when the spend circuits ship. Until then your notes hold value but cannot move.")}`,
+    );
+    return;
+  }
   console.log(
     `\n  ${warnMark()} ${muted("Local shielded pool — no contract on")} ${bone(net.label)} ${muted("yet, so this is recorded off-chain only. Real on-chain privacy lights up when the pool deploys.")}`,
   );
 }
 const warnMark = () => acid("!");
 
-/** Feature that needs on-chain Cowl contracts that aren't deployed yet. */
-function pending(feature: string, which: keyof CowlContracts, net: NetworkDef): never {
-  warn(`${feature} is not live on ${bone(net.label)} yet.`);
+/**
+ * Best-effort chain sync before reading shielded state. When the RPC is down the
+ * last synced view still shows — a trader glancing at their portfolio should never
+ * be locked out by a flaky endpoint — but the staleness is said out loud.
+ */
+async function syncPoolQuietly(
+  net: NetworkDef,
+  json: boolean,
+  opts: { full?: boolean } = {},
+): Promise<import("./shielded/sync.js").SyncResult | null> {
+  if (!net.contracts.pool) return null;
+  const s = json ? null : p.spinner();
+  s?.start(opts.full ? "Replaying the pool's full history" : "Syncing with the pool contract");
+  try {
+    const { syncShieldedPool } = await import("./shielded/sync.js");
+    const r = await syncShieldedPool(net, opts);
+    s?.stop(
+      r && r.appended > 0
+        ? `Synced · ${r.appended} new leaf${r.appended === 1 ? "" : "s"} · ${r.totalLeaves} total`
+        : `Synced · ${r?.totalLeaves ?? 0} ${r?.totalLeaves === 1 ? "leaf" : "leaves"}`,
+    );
+    return r;
+  } catch (e) {
+    s?.stop("Sync failed");
+    // stderr on purpose: in --json mode stdout must stay parseable, and a human in
+    // TTY mode sees stderr inline anyway.
+    console.error(
+      `  ${warnMark()} ${muted("Couldn't reach the pool contract — showing the last synced state.")} ${dim((e as Error).message.split("\n")[0] ?? "")}`,
+    );
+    return null;
+  }
+}
+
+/**
+ * Spend ops (unshield, private send, trade) on a network whose pool is a real
+ * contract. Their circuits have not shipped, and simulating them here would
+ * corrupt the chain-synced ledger: a sim nullifier pins a REAL note as spent, and
+ * the sim's output note vanishes on the next sync because the chain never saw it —
+ * which reads as lost funds. So on pool networks they are switched off, not
+ * simulated. Same shape as `stake`: ran fine, has something to say, exits 0.
+ */
+function spendsPending(net: NetworkDef, what: string): never {
+  warn(`${what} is not live on ${bone(net.label)} yet — the spend circuits haven't shipped.`);
   console.log(
-    `  ${muted(
-      `The Cowl protocol contracts are not deployed on public networks yet — this CLI is testnet-first.`,
-    )}`,
+    `  ${muted("Your shielded notes are settled on chain and become spendable the moment the circuits land.")}`,
   );
   console.log(
-    `  ${muted(`Once deployed:`)} ${dim(`cowl config set contracts.${which} 0x…`)}`,
+    `  ${muted("Want the full simulated flow? Use a network without a pool contract:")} ${dim("cowl -n arbitrum-sepolia …")}`,
+  );
+  process.exit(0);
+}
+
+/** Feature whose contract is not deployed on this network yet. */
+function pending(feature: string, which: keyof CowlContracts, net: NetworkDef): never {
+  warn(`${feature} is not live on ${bone(net.label)} yet.`);
+  console.log(`  ${muted(`No ${which} contract is deployed there.`)}`);
+  console.log(
+    `  ${muted(`Once it is:`)} ${dim(`cowl config set contracts.${which} 0x…`)}`,
   );
   process.exit(0);
 }
@@ -647,15 +706,19 @@ program
     if (opts.shielded) {
       const sym = net.currency.symbol;
       const keys = await shieldedKeys();
+      const sync = await syncPoolQuietly(net, json);
       const bal = poolBalance(net.key, keys);
-      out(json, { shielded: bal.map((b) => ({ token: tokenLabel(b.token, sym), amount: formatEther(b.amount), notes: b.notes })) }, () => {
+      out(json, {
+        shielded: bal.map((b) => ({ token: tokenLabel(b.token, sym), amount: formatEther(b.amount), notes: b.notes })),
+        ...(sync ? { pool: { leaves: sync.totalLeaves, root: sync.root } } : {}),
+      }, () => {
         heading("Shielded balance");
         if (bal.length === 0) {
           console.log(`  ${dim("Empty. Fund it with")} ${dim("cowl shield <amount>")}`);
         } else {
           for (const b of bal) row(tokenLabel(b.token, sym), `${bold(formatEther(b.amount))} ${muted(`· ${b.notes} note${b.notes === 1 ? "" : "s"}`)}`);
         }
-        localNotice(net);
+        localNotice(net, "view");
       });
       return;
     }
@@ -910,6 +973,7 @@ program
 
     // A zcowl: recipient is a private, in-pool transfer from your shielded balance.
     if (isPaymentAddress(to)) {
+      if (net.contracts.pool) spendsPending(net, "Private send");
       const sym = net.currency.symbol;
       const tokenField = tokenToField(token, sym);
       const recipient = decodePaymentAddress(to);
@@ -989,15 +1053,139 @@ program
     const sym = net.currency.symbol;
     if (!(Number(amount) > 0)) die("Amount must be positive.");
     const tokenField = tokenToField(token ?? sym, sym);
-    const keys = await shieldedKeys();
-    const res = poolShield(net.key, keys, parseEther(amount), tokenField);
-    heading("Shielded");
-    row("Amount", `${bold(amount)} ${muted(tokenLabel(tokenField, sym))}`);
-    row("Commitment", muted(res.commitment));
-    row("Leaf", muted(`#${res.leafIndex}`));
-    row("Root", muted(res.root));
-    localNotice(net);
+
+    // Where the pool is deployed the deposit is real: prove, settle on chain, and
+    // take the leaf index from the receipt. Elsewhere it stays the local simulation.
+    const { poolAddress } = await import("./shielded/contract.js");
+    if (!poolAddress(net)) {
+      const keys = await shieldedKeys();
+      const res = poolShield(net.key, keys, parseEther(amount), tokenField);
+      heading("Shielded");
+      row("Amount", `${bold(amount)} ${muted(tokenLabel(tokenField, sym))}`);
+      row("Commitment", muted(res.commitment));
+      row("Leaf", muted(`#${res.leafIndex}`));
+      row("Root", muted(res.root));
+      localNotice(net);
+      return;
+    }
+
+    await shieldOnChain(net, amount, tokenField, sym);
   });
+
+/**
+ * A real deposit: build the note, prove it, land the transaction, then rebuild the
+ * local tree from the chain's commitment log. Nothing is written locally until the
+ * transaction confirms, so a failed shield leaves no phantom note behind.
+ */
+async function shieldOnChain(
+  net: NetworkDef,
+  amount: string,
+  tokenField: bigint,
+  sym: string,
+): Promise<void> {
+  requireWallet();
+  const { proveShield } = await import("./shielded/prove.js");
+  const { submitShield, approvePool, poolAddress } = await import("./shielded/contract.js");
+  const { newNote, commitment } = await import("./shielded/note.js");
+  const { recordMyNote, stashPendingNote } = await import("./shielded/pool.js");
+  const { syncShieldedPool } = await import("./shielded/sync.js");
+  const { fieldToHex } = await import("./shielded/field.js");
+
+  // Resolve what is actually being deposited before asking for a passphrase or
+  // proving anything. Listed market symbols are sim-only sentinels with no contract
+  // behind them, and a real ERC-20's decimals come from the chain — assuming 18
+  // would shield the wrong amount on a 6-decimal token.
+  let value: bigint;
+  let label = tokenLabel(tokenField, sym);
+  if (tokenField === 0n) {
+    value = parseEther(amount);
+  } else {
+    const { TOKENS_BY_FIELD } = await import("./shielded/tokens.js");
+    const listed = TOKENS_BY_FIELD.get(tokenField);
+    if (listed) {
+      die(
+        `${listed.symbol} is a simulated market token with no contract behind it.`,
+        `On-chain shielding takes ${sym} or a real ERC-20 address.`,
+      );
+    }
+    const addr = `0x${tokenField.toString(16).padStart(40, "0")}` as Address;
+    try {
+      const meta = await tokenMeta(net, addr);
+      value = parseUnits(amount, meta.decimals);
+      label = meta.symbol;
+    } catch {
+      die(`Can't read that token on ${net.label}.`, `Is ${addr} an ERC-20 on this network?`);
+    }
+  }
+
+  heading("Shield");
+  row("Amount", `${bold(amount)} ${muted(label)}`);
+  row("Pool", muted(poolAddress(net)!));
+  row("Network", muted(net.label));
+
+  const go = unwrap(await p.confirm({ message: "Sign and broadcast?", initialValue: false }));
+  if (!go) return;
+
+  // One passphrase unlocks both halves: the account that signs the deposit and the
+  // shielded keys the note is minted to.
+  const pass = await askPassphrase();
+  const { unlockKeystore } = await import("./keystore.js");
+  const account = unlockKeystore(pass);
+  const keys = deriveShieldedKeys(exportPrivateKey(pass));
+
+  const note = newNote(value, tokenField, keys.mpk);
+  const c = commitment(note);
+
+  const s = p.spinner();
+  s.start("Proving");
+  try {
+    const proof = await proveShield(note, c);
+
+    if (tokenField !== 0n) {
+      s.message("Approving the pool");
+      await approvePool(net, account, `0x${tokenField.toString(16).padStart(40, "0")}`, value);
+    }
+
+    s.message("Broadcasting");
+    // The note's secrets go to disk BEFORE the transaction: if anything dies between
+    // the deposit landing and the local files updating, the blinding survives and
+    // `cowl scan` adopts the note once its commitment shows up in the log.
+    stashPendingNote(net.key, note);
+    const receipt = await submitShield(net, account, {
+      token: tokenField,
+      value,
+      commitment: fieldToHex(c) as `0x${string}`,
+      proof,
+    });
+
+    // Past this point the deposit is on chain — a local hiccup must not read as a
+    // failed shield, so sync problems get their own message and a recovery path.
+    try {
+      s.message("Syncing the tree");
+      await syncShieldedPool(net);
+      const res = recordMyNote(net.key, keys, note, receipt.leafIndex);
+      s.stop("Shielded");
+
+      row("Commitment", muted(res.commitment));
+      row("Leaf", muted(`#${res.leafIndex}`));
+      row("Root", muted(res.root));
+      row("Gas", muted(receipt.gasUsed.toLocaleString("en-US")));
+      ok(`Shielded on chain. ${muted(txLink(net, receipt.hash))}`);
+    } catch (e) {
+      s.stop("Shielded, local sync pending");
+      ok(`Deposit landed on chain. ${muted(txLink(net, receipt.hash))}`);
+      console.log(
+        `  ${warnMark()} ${muted("Local sync failed:")} ${dim((e as Error).message.split("\n")[0] ?? "")}`,
+      );
+      console.log(
+        `  ${muted("Your note is stashed — run")} ${bone("cowl scan")} ${muted("to finish once the RPC answers.")}`,
+      );
+    }
+  } catch (e) {
+    s.stop("failed");
+    die((e as Error).message);
+  }
+}
 
 program
   .command("unshield")
@@ -1006,6 +1194,7 @@ program
   .argument("[token]", "native symbol (default) or an ERC-20 address")
   .action(async (amount: string, token?: string) => {
     const { net } = ctx();
+    if (net.contracts.pool) spendsPending(net, "Unshield");
     const sym = net.currency.symbol;
     if (!(Number(amount) > 0)) die("Amount must be positive.");
     const tokenField = tokenToField(token ?? sym, sym);
@@ -1038,13 +1227,20 @@ program
 program
   .command("scan")
   .description("scan the shielded pool for notes paid to you")
-  .action(async () => {
+  .option("--deep", "replay the pool's whole on-chain history and repair any local divergence")
+  .action(async (opts: { deep?: boolean }) => {
     const { net, json } = ctx();
     const keys = await shieldedKeys();
+    // The everyday scan rides the cursor — cheap, and enough to pick up new leaves
+    // and adopt pending deposits. --deep is the repair path: replay everything from
+    // the deploy block and heal divergence the incremental pass cannot see. It
+    // costs O(chain age), which is exactly why it is a flag and not the default.
+    const sync = await syncPoolQuietly(net, json, { full: !!opts.deep });
     const { discovered } = poolScan(net.key, keys);
-    out(json, { discovered }, () =>
-      ok(discovered > 0 ? `Found ${bold(String(discovered))} new note${discovered === 1 ? "" : "s"}.` : "No new notes."),
-    );
+    out(json, { discovered, ...(sync ? { resynced: sync.resynced } : {}) }, () => {
+      if (sync?.resynced) ok("Local pool state had drifted from the chain — repaired.");
+      ok(discovered > 0 ? `Found ${bold(String(discovered))} new note${discovered === 1 ? "" : "s"}.` : "No new notes.");
+    });
   });
 
 /** Format a WAD-scaled amount to a fixed number of decimals. */
@@ -1163,9 +1359,10 @@ program
       }
     }
 
-    // ---- shielded (local notes) ----
+    // ---- shielded (notes, synced with the pool contract where one exists) ----
     let shieldedRows: PortfolioRow[] = [];
     if (showShielded && keys) {
+      await syncPoolQuietly(net, json);
       shieldedRows = poolBalance(net.key, keys).map((b) => {
         const symbol = tokenLabel(b.token, sym);
         return { symbol, amount: b.amount, value: valueOf(symbol, b.amount), notes: b.notes };
@@ -1214,7 +1411,7 @@ program
     if (showShielded) {
       shTotal = renderSection(
         "Shielded",
-        "private, computed from your notes",
+        net.contracts.pool ? "private, notes synced with the on-chain pool" : "private, computed from your notes",
         shieldedRows,
         "Empty. Fund it with cowl shield <amount> [token]",
       );
@@ -1240,7 +1437,7 @@ program
         );
       }
     }
-    if (showShielded) localNotice(net);
+    if (showShielded) localNotice(net, "view");
   });
 
 // ---- tracked tokens ---------------------------------------------------------
@@ -1334,6 +1531,7 @@ program
   .argument("<market>", "market, e.g. TSLA-USDG")
   .action(async (side: string, amount: string, market: string) => {
     const { net } = ctx();
+    if (net.contracts.pool) spendsPending(net, "Private trading");
     const sym = net.currency.symbol;
     const sideNorm = side.toLowerCase();
     if (sideNorm !== "buy" && sideNorm !== "sell") die('Side must be "buy" or "sell".');

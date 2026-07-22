@@ -24,8 +24,15 @@ import type { ShieldedKeys, PaymentAddress } from "./keys.js";
 export type Pool = {
   commitments: string[]; // hex, insertion order = leaf index
   nullifiers: string[]; // hex, the spent set
-  ciphertexts: NoteCipher[]; // one per commitment (same index)
+  // One slot per commitment, same index. Null where we hold the commitment but not
+  // the note behind it — every leaf someone else deposited on chain, since the pool
+  // contract publishes commitments but not the encrypted notes.
+  ciphertexts: (NoteCipher | null)[];
   root: string; // current Merkle root (hex)
+  // Last block the on-chain NoteCommitted log was replayed through. The next sync
+  // resumes here instead of the deploy block, so a balance check costs one small
+  // log query, not the pool's whole history. Absent on sim-only networks.
+  syncedBlock?: string;
 };
 
 export type StoredNote = {
@@ -36,7 +43,15 @@ export type StoredNote = {
   spent: boolean;
 };
 
-export type Wallet = { notes: StoredNote[] };
+/**
+ * A note whose deposit has broadcast but not yet been filed against a leaf. Written
+ * BEFORE the transaction goes out: if the process dies between the tx landing and
+ * the local files updating, the blinding survives here — without it the funds
+ * behind the commitment would be unspendable forever.
+ */
+export type PendingNote = { value: string; token: string; blinding: string; commitment: string };
+
+export type Wallet = { notes: StoredNote[]; pending?: PendingNote[] };
 
 export function emptyPool(): Pool {
   return { commitments: [], nullifiers: [], ciphertexts: [], root: fieldToHex(computeRoot([])) };
@@ -73,13 +88,28 @@ export function applyShield(pool: Pool, wallet: Wallet, keys: ShieldedKeys, valu
 
 /** Discover notes paid to me and refresh which of my notes are spent. */
 export function applyScan(pool: Pool, wallet: Wallet, keys: ShieldedKeys): { discovered: number } {
+  // Adopt pending deposits whose commitment has appeared in the log — the recovery
+  // path for a shield that broadcast but died before recording locally.
+  if (wallet.pending?.length) {
+    wallet.pending = wallet.pending.filter((pn) => {
+      const idx = pool.commitments.indexOf(pn.commitment);
+      if (idx < 0) return true; // not landed yet — keep waiting
+      if (!wallet.notes.some((n) => n.leafIndex === idx)) {
+        wallet.notes.push({ value: pn.value, token: pn.token, blinding: pn.blinding, leafIndex: idx, spent: false });
+      }
+      return false;
+    });
+  }
+
   const known = new Set(wallet.notes.map((n) => n.leafIndex));
   const nulls = new Set(pool.nullifiers);
   let discovered = 0;
 
   for (let i = 0; i < pool.ciphertexts.length; i++) {
     if (known.has(i)) continue;
-    const dec = tryDecryptNote(pool.ciphertexts[i]!, keys.viewPriv);
+    const cipher = pool.ciphertexts[i];
+    if (!cipher) continue; // commitment known, note not published to us
+    const dec = tryDecryptNote(cipher, keys.viewPriv);
     if (!dec) continue;
     const note: Note = { value: dec.value, token: dec.token, mpk: keys.mpk, blinding: dec.blinding };
     if (fieldToHex(commitment(note)) !== pool.commitments[i]) continue; // not really ours
@@ -88,8 +118,22 @@ export function applyScan(pool: Pool, wallet: Wallet, keys: ShieldedKeys): { dis
     discovered++;
   }
 
+  // Drop notes the pool no longer vouches for: after a chain sync replaced the log,
+  // a sim-era note's leaf either does not exist or holds someone else's commitment.
+  // Without this they would linger as phantom balance forever.
+  wallet.notes = wallet.notes.filter((n) => {
+    const at = pool.commitments[n.leafIndex];
+    if (!at) return false;
+    const note: Note = { value: hexToField(n.value), token: hexToField(n.token), mpk: keys.mpk, blinding: hexToField(n.blinding) };
+    return fieldToHex(commitment(note)) === at;
+  });
+
+  // Recomputed from the ledger each scan, in both directions: a nullifier appearing
+  // marks the note spent, and a nullifier retracted (a sim-era spend cleared by a
+  // chain replay) un-marks it. `spent` is a cache of the nullifier set, not a fact
+  // of its own.
   for (const n of wallet.notes) {
-    if (!n.spent && nulls.has(fieldToHex(nullifier(keys.nk, n.leafIndex)))) n.spent = true;
+    n.spent = nulls.has(fieldToHex(nullifier(keys.nk, n.leafIndex)));
   }
   return { discovered };
 }
@@ -217,7 +261,7 @@ export function loadPool(net: string): Pool {
   const path = join(POOL_DIR, `pool-${net}.json`);
   return existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Pool) : emptyPool();
 }
-function savePool(net: string, pool: Pool): void {
+export function savePool(net: string, pool: Pool): void {
   ensureDir(POOL_DIR);
   writeFileSync(join(POOL_DIR, `pool-${net}.json`), JSON.stringify(pool, null, 2) + "\n", { mode: 0o600 });
 }
@@ -238,6 +282,110 @@ export function shield(net: string, keys: ShieldedKeys, value: bigint, token: bi
   savePool(net, pool);
   saveWallet(net, wallet);
   return res;
+}
+
+/**
+ * Rebuild the local commitment log from the chain's, then record a note we just
+ * deposited at the leaf index the CONTRACT assigned.
+ *
+ * The chain is the authority on ordering: between building a note and landing the
+ * transaction, anyone else's deposit can take the index the local tree expected. So
+ * the local log follows the chain's, and a deposited note is filed against the index
+ * the receipt reported — never a locally guessed one.
+ */
+
+/** The local log and the chain's log disagree — only a full replay can reconcile. */
+export class ChainDrift extends Error {}
+
+/**
+ * Append newly seen on-chain leaves to the local log. Incremental on purpose: the
+ * usual sync carries a handful of leaves, so the overlap check plus an append beats
+ * rebuilding the whole pool. Throws ChainDrift when the logs disagree — an overlap
+ * mismatch (stale sim-era state, a reorg) or a gap (cursor block was skipped) —
+ * and the caller falls back to a full replay.
+ */
+export function applyChainLeaves(
+  pool: Pool,
+  leaves: { index: number; commitment: string }[],
+  totalLeaves: number,
+): number {
+  let appended = 0;
+  for (const leaf of [...leaves].sort((a, b) => a.index - b.index)) {
+    if (leaf.index < pool.commitments.length) {
+      if (pool.commitments[leaf.index] !== leaf.commitment) {
+        throw new ChainDrift(`Local leaf #${leaf.index} does not match the chain.`);
+      }
+      continue;
+    }
+    if (leaf.index > pool.commitments.length) {
+      throw new ChainDrift(`Leaf #${leaf.index} arrived before #${pool.commitments.length}.`);
+    }
+    pool.commitments.push(leaf.commitment);
+    pool.ciphertexts.push(null); // the chain publishes commitments, not notes
+    appended++;
+  }
+  if (pool.commitments.length !== totalLeaves) {
+    throw new ChainDrift(
+      `Pool has ${totalLeaves} leaves on chain but ${pool.commitments.length} locally.`,
+    );
+  }
+  if (appended > 0) pool.root = fieldToHex(computeRoot(pool.commitments.map(hexToField)));
+  return appended;
+}
+
+/**
+ * Replace the local log with the chain's wholesale — the ChainDrift recovery path.
+ * Ciphertexts are carried across by commitment value, not by position, so stale
+ * local state can never leave a note glued to someone else's leaf.
+ */
+export function alignPoolToChain(pool: Pool, chainCommitments: string[]): void {
+  const cipherByCommitment = new Map<string, NoteCipher>();
+  pool.commitments.forEach((c, i) => {
+    const cipher = pool.ciphertexts[i];
+    if (cipher) cipherByCommitment.set(c, cipher);
+  });
+  pool.commitments = [...chainCommitments];
+  pool.ciphertexts = pool.commitments.map((c) => cipherByCommitment.get(c) ?? null);
+  pool.root = fieldToHex(computeRoot(pool.commitments.map(hexToField)));
+}
+
+/**
+ * File a note we just deposited, after a sync has brought the local log up to the
+ * chain. Verifies the chain put our commitment where the receipt said before
+ * anything is written.
+ */
+export function recordMyNote(net: string, keys: ShieldedKeys, note: Note, leafIndex: number): ShieldResult {
+  const pool = loadPool(net), wallet = loadWallet(net);
+
+  const c = fieldToHex(commitment(note));
+  if (pool.commitments[leafIndex] !== c) {
+    throw new Error(
+      `Chain leaf #${leafIndex} holds ${pool.commitments[leafIndex] ?? "nothing"}, not the commitment we deposited (${c}).`,
+    );
+  }
+
+  pool.ciphertexts[leafIndex] = encryptNote(note, keys.viewPubHex);
+  if (!wallet.notes.some((n) => n.leafIndex === leafIndex)) wallet.notes.push(toStored(note, leafIndex));
+  if (wallet.pending) wallet.pending = wallet.pending.filter((pn) => pn.commitment !== c);
+  savePool(net, pool);
+  saveWallet(net, wallet);
+  return { leafIndex, commitment: c, root: pool.root };
+}
+
+/** Stash a note's secrets on disk before its deposit broadcasts — see PendingNote. */
+export function stashPendingNote(net: string, note: Note): void {
+  const wallet = loadWallet(net);
+  const c = fieldToHex(commitment(note));
+  wallet.pending = wallet.pending ?? [];
+  if (!wallet.pending.some((pn) => pn.commitment === c)) {
+    wallet.pending.push({
+      value: fieldToHex(note.value),
+      token: fieldToHex(note.token),
+      blinding: fieldToHex(note.blinding),
+      commitment: c,
+    });
+  }
+  saveWallet(net, wallet);
 }
 
 export function scan(net: string, keys: ShieldedKeys): { discovered: number } {
