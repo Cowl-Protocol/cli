@@ -1,0 +1,6 @@
+# Witness for a smoke-test proof — the same vector test_commitment_shape pins.
+mpk = "1"
+blinding = "4"
+token = "2"
+value = "3"
+commitment = "0x130bf204a32cac1f0ace56c78b731aa3809f06df2731ebcf6b3464a15788b1b9"
