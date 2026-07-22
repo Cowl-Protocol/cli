@@ -1,0 +1,7 @@
+# Witness for the contract integration test — a native-coin (token 0) deposit,
+# so ShieldedPool takes the msg.value path. commitment = Poseidon2(1, 0, 3, 4).
+mpk = "1"
+blinding = "4"
+token = "0"
+value = "3"
+commitment = "0x0087943cdbcce40307e143be7ff6091f2116484a4adf3f8c4d4f27f5e20375ac"
