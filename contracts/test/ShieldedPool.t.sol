@@ -3,7 +3,8 @@ pragma solidity ^0.8.27;
 
 import {Test} from "forge-std/Test.sol";
 import {ShieldedPool} from "../src/ShieldedPool.sol";
-import {IVerifier, HonkVerifier} from "../src/ShieldVerifier.sol";
+import {IVerifier, ShieldVerifier} from "../src/ShieldVerifier.sol";
+import {TransferVerifier} from "../src/TransferVerifier.sol";
 
 contract MockVerifier is IVerifier {
     bool public result = true;
@@ -17,106 +18,311 @@ contract MockVerifier is IVerifier {
     }
 }
 
+/// Everything the pool enforces on its own, with the proof stubbed out. The
+/// circuits are checked separately (nargo test) and end to end below.
 contract ShieldedPoolTest is Test {
-    // The smoke-test vector from circuits/shield/Prover.toml:
-    // Poseidon2(mpk=1, token=2, value=3, blinding=4).
-    bytes32 constant COMMITMENT =
-        0x130bf204a32cac1f0ace56c78b731aa3809f06df2731ebcf6b3464a15788b1b9;
     uint256 constant FR =
         21888242871839275222246405745257275088548364400416034343698204186575808495617;
 
-    MockVerifier verifier;
+    /// Public inputs have to be canonical field elements, and a raw keccak hash
+    /// is not one. Shifting off the top byte lands every fixture below FR.
+    function _f(string memory label) internal pure returns (bytes32) {
+        return bytes32(uint256(keccak256(bytes(label))) >> 8);
+    }
+
+    MockVerifier shieldVerifier;
+    MockVerifier transferVerifier;
     ShieldedPool pool;
 
     event NoteCommitted(bytes32 indexed commitment, uint32 leafIndex);
+    event Nullified(bytes32 indexed nullifier);
 
     function setUp() public {
-        verifier = new MockVerifier();
-        pool = new ShieldedPool(IVerifier(address(verifier)));
+        shieldVerifier = new MockVerifier();
+        transferVerifier = new MockVerifier();
+        pool = new ShieldedPool(
+            IVerifier(address(shieldVerifier)), IVerifier(address(transferVerifier))
+        );
     }
 
-    function test_shield_native_commits_and_emits() public {
+    // ------------------------------------------------------------- shield ---
+
+    function test_starts_at_the_empty_root() public view {
+        assertEq(pool.root(), pool.EMPTY_ROOT());
+        assertTrue(pool.knownRoot(pool.EMPTY_ROOT()));
+        assertEq(pool.nextLeafIndex(), 0);
+    }
+
+    function test_shield_native_commits_and_advances_the_root() public {
         vm.expectEmit();
-        emit NoteCommitted(COMMITMENT, 0);
-        pool.shield{value: 3}(0, 3, COMMITMENT, "");
-        assertTrue(pool.committed(COMMITMENT));
+        emit NoteCommitted(_f("commitment"), 0);
+        pool.shield{value: 3}(0, 3, _f("commitment"), _f("root-1"), "");
+
+        assertTrue(pool.committed(_f("commitment")));
         assertEq(pool.nextLeafIndex(), 1);
+        assertEq(pool.root(), _f("root-1"));
+        assertTrue(pool.knownRoot(_f("root-1")));
+        // The root the tree grew out of stays spendable.
+        assertTrue(pool.knownRoot(pool.EMPTY_ROOT()));
         assertEq(address(pool).balance, 3);
     }
 
     function test_shield_rejects_duplicate_commitment() public {
-        pool.shield{value: 3}(0, 3, COMMITMENT, "");
+        pool.shield{value: 3}(0, 3, _f("commitment"), _f("root-1"), "");
         vm.expectRevert(ShieldedPool.DuplicateCommitment.selector);
-        pool.shield{value: 3}(0, 3, COMMITMENT, "");
+        pool.shield{value: 3}(0, 3, _f("commitment"), _f("root-2"), "");
     }
 
     function test_shield_rejects_wrong_native_amount() public {
         vm.expectRevert(ShieldedPool.WrongDeposit.selector);
-        pool.shield{value: 2}(0, 3, COMMITMENT, "");
+        pool.shield{value: 2}(0, 3, _f("commitment"), _f("root-1"), "");
     }
 
     function test_shield_rejects_invalid_proof() public {
-        verifier.set(false);
+        shieldVerifier.set(false);
         vm.expectRevert(ShieldedPool.InvalidProof.selector);
-        pool.shield{value: 3}(0, 3, COMMITMENT, "");
+        pool.shield{value: 3}(0, 3, _f("commitment"), _f("root-1"), "");
     }
 
     function test_shield_rejects_zero_value() public {
         vm.expectRevert(ShieldedPool.ZeroValue.selector);
-        pool.shield(0, 0, COMMITMENT, "");
+        pool.shield(0, 0, _f("commitment"), _f("root-1"), "");
     }
 
     function test_shield_rejects_noncanonical_field() public {
         vm.expectRevert(ShieldedPool.NotAField.selector);
-        pool.shield{value: 0}(0, FR, COMMITMENT, "");
+        pool.shield{value: 0}(0, FR, _f("commitment"), _f("root-1"), "");
         vm.expectRevert(ShieldedPool.NotAField.selector);
-        pool.shield{value: 3}(0, 3, bytes32(FR), "");
+        pool.shield{value: 3}(0, 3, bytes32(FR), _f("root-1"), "");
+        vm.expectRevert(ShieldedPool.NotAField.selector);
+        pool.shield{value: 3}(0, 3, _f("commitment"), bytes32(FR), "");
     }
 
     function test_shield_rejects_oversized_token_id() public {
         uint256 wide = (uint256(1) << 160) | 0x1111;
         vm.expectRevert(ShieldedPool.NotAField.selector);
-        pool.shield(wide, 3, COMMITMENT, "");
+        pool.shield(wide, 3, _f("commitment"), _f("root-1"), "");
     }
 
     function test_shield_rejects_eth_sent_with_erc20_deposit() public {
         vm.expectRevert(ShieldedPool.WrongDeposit.selector);
-        pool.shield{value: 3}(0x1111, 3, COMMITMENT, "");
+        pool.shield{value: 3}(0x1111, 3, _f("commitment"), _f("root-1"), "");
+    }
+
+    // -------------------------------------------------------------- spend ---
+
+    function _spend() internal view returns (ShieldedPool.Spend memory s) {
+        s.membershipRoot = pool.root();
+        s.nullifiers = [_f("n0"), _f("n1")];
+        s.commitments = [_f("c0"), _f("c1")];
+        s.newRoot = _f("root-next");
+        s.token = 0;
+        s.value = 250;
+        s.fee = 50;
+        s.recipient = address(0xB0B);
+        s.relayer = address(0xC0FFEE);
+    }
+
+    function _fundedPool() internal returns (ShieldedPool.Spend memory s) {
+        pool.shield{value: 1000}(0, 1000, _f("commitment"), _f("root-1"), "");
+        s = _spend();
+    }
+
+    function test_spend_nullifies_appends_and_pays_out() public {
+        ShieldedPool.Spend memory s = _fundedPool();
+
+        vm.expectEmit();
+        emit Nullified(s.nullifiers[0]);
+        pool.spend(s, "");
+
+        assertTrue(pool.nullifierSpent(s.nullifiers[0]));
+        assertTrue(pool.nullifierSpent(s.nullifiers[1]));
+        assertTrue(pool.committed(s.commitments[0]));
+        assertEq(pool.nextLeafIndex(), 3); // leaf 0 was the deposit
+        assertEq(pool.root(), s.newRoot);
+        assertEq(s.recipient.balance, 250);
+        assertEq(s.relayer.balance, 50);
+        assertEq(address(pool).balance, 700);
+    }
+
+    function test_spend_pays_nothing_when_the_legs_are_private() public {
+        ShieldedPool.Spend memory s = _fundedPool();
+        s.value = 0;
+        s.fee = 0;
+        pool.spend(s, "");
+        assertEq(address(pool).balance, 1000);
+        assertEq(s.recipient.balance, 0);
+    }
+
+    function test_spend_rejects_a_root_the_pool_never_had() public {
+        ShieldedPool.Spend memory s = _fundedPool();
+        s.membershipRoot = _f("never");
+        vm.expectRevert(ShieldedPool.UnknownRoot.selector);
+        pool.spend(s, "");
+    }
+
+    function test_spend_rejects_a_replayed_nullifier() public {
+        ShieldedPool.Spend memory s = _fundedPool();
+        pool.spend(s, "");
+
+        ShieldedPool.Spend memory again = _spend();
+        again.membershipRoot = pool.root();
+        again.commitments = [_f("c2"), _f("c3")];
+        again.value = 0;
+        again.fee = 0;
+        vm.expectRevert(ShieldedPool.AlreadySpent.selector);
+        pool.spend(again, "");
+    }
+
+    function test_spend_rejects_the_same_nullifier_twice_in_one_tx() public {
+        ShieldedPool.Spend memory s = _fundedPool();
+        s.nullifiers[1] = s.nullifiers[0];
+        vm.expectRevert(ShieldedPool.RepeatedNullifier.selector);
+        pool.spend(s, "");
+    }
+
+    function test_spend_rejects_a_commitment_already_in_the_tree() public {
+        ShieldedPool.Spend memory s = _fundedPool();
+        s.commitments[0] = _f("commitment");
+        vm.expectRevert(ShieldedPool.DuplicateCommitment.selector);
+        pool.spend(s, "");
+    }
+
+    function test_spend_rejects_a_payout_with_nowhere_to_go() public {
+        ShieldedPool.Spend memory s = _fundedPool();
+        s.recipient = address(0);
+        vm.expectRevert(ShieldedPool.NoRecipient.selector);
+        pool.spend(s, "");
+    }
+
+    function test_spend_rejects_invalid_proof() public {
+        ShieldedPool.Spend memory s = _fundedPool();
+        transferVerifier.set(false);
+        vm.expectRevert(ShieldedPool.InvalidProof.selector);
+        pool.spend(s, "");
+    }
+
+    /// History is a ring, so a note proven against a root older than the window
+    /// has to be reproven against a current one.
+    function test_root_history_evicts_the_oldest() public {
+        bytes32 first = pool.EMPTY_ROOT();
+        uint32 span = pool.ROOT_HISTORY();
+        for (uint256 i = 0; i < span; i++) {
+            pool.shield{value: 1}(0, 1, _f(string.concat("c", vm.toString(i))), _f(string.concat("r", vm.toString(i))), "");
+        }
+        assertFalse(pool.knownRoot(first));
+        assertTrue(pool.knownRoot(pool.root()));
     }
 }
 
-/// The real thing: the bb-emitted HonkVerifier fed the proof bb generated for
-/// circuits/shield (the ProverNative witness — a native-coin deposit, so the
-/// pool takes the msg.value path). If this passes, the whole chain holds —
-/// note math in JS, circuit in Noir, proof by bb, verification in the EVM.
+/// The real thing: bb's own verifiers fed bb's own proofs, over fixtures built
+/// by the CLI's note math (circuits/fixtures.mjs). A deposit of 1000 wei, then a
+/// spend of that exact note paying 250 out and 50 to a relayer, leaving 700
+/// shielded. If this passes, the whole chain holds — note math in JS, circuits in
+/// Noir, proofs by bb, verification in the EVM, accounting in the pool.
 contract ShieldedPoolIntegrationTest is Test {
-    // Poseidon2(mpk=1, token=0, value=3, blinding=4), pinned in ProverNative.toml.
-    bytes32 constant COMMITMENT =
-        0x0087943cdbcce40307e143be7ff6091f2116484a4adf3f8c4d4f27f5e20375ac;
-
     ShieldedPool pool;
-    bytes proof;
+    bytes shieldProof;
+    bytes spendProof;
+    bytes32[] shieldInputs;
+    bytes32[] spendInputs;
 
     function setUp() public {
-        pool = new ShieldedPool(IVerifier(address(new HonkVerifier())));
-        proof = vm.readFileBinary("../circuits/target/shield-evm-native/proof");
+        pool = new ShieldedPool(
+            IVerifier(address(new ShieldVerifier())), IVerifier(address(new TransferVerifier()))
+        );
+        shieldProof = vm.readFileBinary("../circuits/target/shield-fixture/proof");
+        spendProof = vm.readFileBinary("../circuits/target/transfer-fixture/proof");
+        shieldInputs = vm.parseJsonBytes32Array(
+            vm.readFile("../circuits/target/shield-fixture/public_inputs.json"), ".publicInputs"
+        );
+        spendInputs = vm.parseJsonBytes32Array(
+            vm.readFile("../circuits/target/transfer-fixture/public_inputs.json"), ".publicInputs"
+        );
+    }
+
+    function _deposit() internal {
+        pool.shield{value: uint256(shieldInputs[1])}(
+            uint256(shieldInputs[0]), // token
+            uint256(shieldInputs[1]), // value
+            shieldInputs[2], // commitment
+            shieldInputs[4], // new root
+            shieldProof
+        );
+    }
+
+    function _spend() internal view returns (ShieldedPool.Spend memory s) {
+        s.membershipRoot = spendInputs[0];
+        s.nullifiers = [spendInputs[1], spendInputs[2]];
+        s.commitments = [spendInputs[3], spendInputs[4]];
+        s.newRoot = spendInputs[6];
+        s.token = uint256(spendInputs[8]);
+        s.value = uint256(spendInputs[9]);
+        s.fee = uint256(spendInputs[10]);
+        s.recipient = address(uint160(uint256(spendInputs[11])));
+        s.relayer = address(uint160(uint256(spendInputs[12])));
+    }
+
+    function test_fixture_deposit_starts_from_the_empty_root() public view {
+        assertEq(shieldInputs[3], pool.EMPTY_ROOT());
     }
 
     function test_real_proof_shields() public {
-        pool.shield{value: 3}(0, 3, COMMITMENT, proof);
-        assertTrue(pool.committed(COMMITMENT));
-        assertEq(address(pool).balance, 3);
+        _deposit();
+        assertTrue(pool.committed(shieldInputs[2]));
+        assertEq(pool.root(), shieldInputs[4]);
+        assertEq(pool.nextLeafIndex(), 1);
+        assertEq(address(pool).balance, 1000);
+    }
+
+    function test_real_proof_spends_and_pays_out() public {
+        _deposit();
+        ShieldedPool.Spend memory s = _spend();
+
+        pool.spend(s, spendProof);
+
+        assertEq(s.recipient.balance, 250);
+        assertEq(s.relayer.balance, 50);
+        assertEq(address(pool).balance, 700);
+        assertEq(pool.nextLeafIndex(), 3);
+        assertEq(pool.root(), s.newRoot);
+        assertTrue(pool.nullifierSpent(s.nullifiers[0]));
+    }
+
+    function test_spend_proof_is_bound_to_its_recipient() public {
+        _deposit();
+        ShieldedPool.Spend memory s = _spend();
+        // The whole point of binding recipient into the proof: a mempool
+        // observer cannot re-point a pending unshield at themselves.
+        s.recipient = address(0xBAD);
+        vm.expectRevert();
+        pool.spend(s, spendProof);
+    }
+
+    function test_spend_proof_cannot_inflate_its_payout() public {
+        _deposit();
+        ShieldedPool.Spend memory s = _spend();
+        s.value = 900;
+        vm.expectRevert();
+        pool.spend(s, spendProof);
+    }
+
+    function test_spend_cannot_run_before_the_deposit_it_spends() public {
+        // Without the deposit the pool is still at the empty root, so the
+        // membership root the proof names is unknown to it.
+        ShieldedPool.Spend memory s = _spend();
+        vm.expectRevert(ShieldedPool.UnknownRoot.selector);
+        pool.spend(s, spendProof);
     }
 
     function test_real_proof_with_wrong_value_reverts() public {
-        // Same proof, tampered public input — the verifier must refuse.
         vm.expectRevert();
-        pool.shield{value: 4}(0, 4, COMMITMENT, proof);
+        pool.shield{value: 1001}(0, 1001, shieldInputs[2], shieldInputs[4], shieldProof);
     }
 
     function test_garbage_proof_reverts() public {
-        bytes memory garbage = new bytes(proof.length);
+        bytes memory garbage = new bytes(shieldProof.length);
         vm.expectRevert();
-        pool.shield{value: 3}(0, 3, COMMITMENT, garbage);
+        pool.shield{value: 1000}(0, 1000, shieldInputs[2], shieldInputs[4], garbage);
     }
 }

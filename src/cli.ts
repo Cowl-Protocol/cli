@@ -1087,9 +1087,10 @@ async function shieldOnChain(
   const { proveShield } = await import("./shielded/prove.js");
   const { submitShield, approvePool, poolAddress } = await import("./shielded/contract.js");
   const { newNote, commitment } = await import("./shielded/note.js");
-  const { recordMyNote, stashPendingNote } = await import("./shielded/pool.js");
+  const { loadPool, recordMyNote, stashPendingNote } = await import("./shielded/pool.js");
   const { syncShieldedPool } = await import("./shielded/sync.js");
-  const { fieldToHex } = await import("./shielded/field.js");
+  const { appendProof } = await import("./shielded/tree.js");
+  const { fieldToHex, hexToField } = await import("./shielded/field.js");
 
   // Resolve what is actually being deposited before asking for a passphrase or
   // proving anything. Listed market symbols are sim-only sentinels with no contract
@@ -1137,9 +1138,18 @@ async function shieldOnChain(
   const c = commitment(note);
 
   const s = p.spinner();
-  s.start("Proving");
+  s.start("Syncing the tree");
   try {
-    const proof = await proveShield(note, c);
+    // The proof carries the root this deposit moves the tree to, so it is only
+    // valid while the pool's root is the one we just read. Sync immediately
+    // before proving to keep that window as small as it can be — and if someone
+    // else's deposit still slips in first, the chain rejects the proof rather
+    // than accepting a root computed over a tree that no longer exists.
+    await syncShieldedPool(net);
+    const at = appendProof(loadPool(net.key).commitments.map(hexToField), c);
+
+    s.message("Proving");
+    const proof = await proveShield(note, c, at);
 
     if (tokenField !== 0n) {
       s.message("Approving the pool");
@@ -1155,6 +1165,7 @@ async function shieldOnChain(
       token: tokenField,
       value,
       commitment: fieldToHex(c) as `0x${string}`,
+      newRoot: fieldToHex(at.newRoot) as `0x${string}`,
       proof,
     });
 

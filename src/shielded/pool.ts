@@ -308,6 +308,7 @@ export function applyChainLeaves(
   pool: Pool,
   leaves: { index: number; commitment: string }[],
   totalLeaves: number,
+  chainRoot?: string,
 ): number {
   let appended = 0;
   for (const leaf of [...leaves].sort((a, b) => a.index - b.index)) {
@@ -330,6 +331,12 @@ export function applyChainLeaves(
     );
   }
   if (appended > 0) pool.root = fieldToHex(computeRoot(pool.commitments.map(hexToField)));
+  // The count only says how many leaves there are. The root says they are the
+  // right leaves in the right order — a corrupted or reordered log that happens
+  // to be the right length gets caught here and nowhere else.
+  if (chainRoot !== undefined && pool.root !== chainRoot) {
+    throw new ChainDrift(`Local root ${pool.root} does not match the chain's ${chainRoot}.`);
+  }
   return appended;
 }
 

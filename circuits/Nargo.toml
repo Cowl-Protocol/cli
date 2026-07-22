@@ -1,2 +1,2 @@
 [workspace]
-members = ["poseidon-parity", "bench-circomlib", "bench-poseidon2", "shield"]
+members = ["poseidon-parity", "bench-circomlib", "bench-poseidon2", "notes", "shield", "transfer"]

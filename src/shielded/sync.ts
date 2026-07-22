@@ -23,11 +23,11 @@ export type SyncResult = {
  * contract — the local simulation is the only ledger there, and there is nothing
  * to sync against.
  *
- * The incremental pass trusts the already-synced prefix: it only sees events after
- * the cursor, so corruption INSIDE that prefix goes unnoticed until the chain
- * disagrees about totals. The contract keeps no root to check against (that
- * arrives with the spend circuits), so `full` exists for the paranoid path —
- * `cowl scan` uses it to replay the whole log and heal any local divergence.
+ * Every pass ends by comparing the rebuilt root against the contract's own. That
+ * covers the case a leaf count cannot: a prefix that drifted before the cursor,
+ * where the log is the right length but not the right tree. A mismatch raises
+ * ChainDrift and falls through to a full replay, and `full` forces that replay
+ * up front — `cowl scan` uses it.
  */
 export async function syncShieldedPool(
   net: NetworkDef,
@@ -45,7 +45,7 @@ export async function syncShieldedPool(
     const from = pool.syncedBlock !== undefined ? BigInt(pool.syncedBlock) + 1n : deployBlock;
     try {
       const chain = await fetchLeaves(net, from);
-      applyChainLeaves(pool, chain.leaves, chain.totalLeaves);
+      applyChainLeaves(pool, chain.leaves, chain.totalLeaves, chain.root);
       pool.syncedBlock = chain.latestBlock.toString();
     } catch (e) {
       if (!(e instanceof ChainDrift)) throw e;
@@ -79,10 +79,16 @@ async function replayEverything(net: NetworkDef, pool: ReturnType<typeof loadPoo
     );
   }
   alignPoolToChain(pool, commitments);
-  // The chain is the authority on spends too. The contract has no nullifier set yet
-  // (that ships with the spend circuits), so after a full replay the spent set is
-  // empty — which also erases any sim-era nullifier that was wrongly pinning a real
-  // note as spent. Read the real set from the contract here once it exists.
+  if (pool.root !== all.root) {
+    throw new Error(
+      `Replayed ${all.totalLeaves} leaves but reached root ${pool.root}, and the pool reports ${all.root}. ` +
+        `The RPC may be serving an incomplete log — try another with: cowl config set rpcUrl <url>`,
+    );
+  }
+  // The chain is the authority on spends too. Rebuilding the spent set means
+  // replaying the contract's Nullified events; until the CLI can actually spend,
+  // clearing it is both correct and the thing that erases a sim-era nullifier
+  // wrongly pinning a real note as spent.
   pool.nullifiers = [];
   pool.syncedBlock = all.latestBlock.toString();
   return pool.commitments.join(",") !== beforeCommitments;

@@ -1,10 +1,13 @@
 // Client for the on-chain ShieldedPool.
 //
-// The contract stores no tree — commitments are an append-only event log, and every
-// client rebuilds the depth-20 Merkle tree from NoteCommitted locally. That keeps
-// the deposit cheap and means the leaf index is assigned by the chain, not guessed
-// here: we read it back off the receipt rather than assuming our note landed where
-// the local tree expected.
+// The contract holds a root but no tree — commitments are an append-only event
+// log, and every client rebuilds the depth-20 Merkle tree from NoteCommitted
+// locally. The root exists so a spend can prove membership; the tree itself stays
+// off chain because the circuits, not Solidity, do the Poseidon2 hashing.
+//
+// One consequence shapes every write here: a proof is built against a specific
+// root, so it is only valid while that root is current. Sync immediately before
+// proving, and treat a revert as "someone deposited first" rather than a bug.
 import { decodeEventLog } from "viem";
 import type { Address, Hash, PrivateKeyAccount, TransactionReceipt } from "viem";
 import { publicClient, walletClient } from "../chain.js";
@@ -20,13 +23,18 @@ export const SHIELDED_POOL_ABI = [
       { name: "token", type: "uint256" },
       { name: "value", type: "uint256" },
       { name: "commitment", type: "bytes32" },
+      { name: "newRoot", type: "bytes32" },
       { name: "proof", type: "bytes" },
     ],
     outputs: [],
   },
   { type: "function", name: "nextLeafIndex", stateMutability: "view", inputs: [], outputs: [{ type: "uint32" }] },
+  { type: "function", name: "root", stateMutability: "view", inputs: [], outputs: [{ type: "bytes32" }] },
+  { type: "function", name: "knownRoot", stateMutability: "view", inputs: [{ name: "r", type: "bytes32" }], outputs: [{ type: "bool" }] },
   { type: "function", name: "committed", stateMutability: "view", inputs: [{ name: "c", type: "bytes32" }], outputs: [{ type: "bool" }] },
-  { type: "function", name: "verifier", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+  { type: "function", name: "nullifierSpent", stateMutability: "view", inputs: [{ name: "n", type: "bytes32" }], outputs: [{ type: "bool" }] },
+  { type: "function", name: "shieldVerifier", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+  { type: "function", name: "transferVerifier", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
   {
     type: "event",
     name: "NoteCommitted",
@@ -34,6 +42,11 @@ export const SHIELDED_POOL_ABI = [
       { name: "commitment", type: "bytes32", indexed: true },
       { name: "leafIndex", type: "uint32", indexed: false },
     ],
+  },
+  {
+    type: "event",
+    name: "Nullified",
+    inputs: [{ name: "nullifier", type: "bytes32", indexed: true }],
   },
 ] as const;
 
@@ -59,7 +72,14 @@ export type ShieldReceipt = {
 export async function submitShield(
   net: NetworkDef,
   account: PrivateKeyAccount,
-  args: { token: bigint; value: bigint; commitment: `0x${string}`; proof: ShieldProof },
+  args: {
+    token: bigint;
+    value: bigint;
+    commitment: `0x${string}`;
+    /** Root the tree reaches once this note is appended — proven, not asserted. */
+    newRoot: `0x${string}`;
+    proof: ShieldProof;
+  },
 ): Promise<ShieldReceipt> {
   const pool = poolAddress(net);
   if (!pool) throw new Error(`No shielded pool deployed on ${net.label}.`);
@@ -71,7 +91,7 @@ export async function submitShield(
     address: pool,
     abi: SHIELDED_POOL_ABI,
     functionName: "shield",
-    args: [args.token, args.value, args.commitment, args.proof.proof],
+    args: [args.token, args.value, args.commitment, args.newRoot, args.proof.proof],
     value: args.token === 0n ? args.value : 0n,
   });
 
@@ -95,6 +115,12 @@ export type ChainLeaves = {
   leaves: { index: number; commitment: `0x${string}` }[];
   /** The contract's own leaf count — the yardstick a sync checks itself against. */
   totalLeaves: number;
+  /**
+   * The contract's own root. A stronger check than the leaf count: it catches a
+   * local log that has the right number of leaves in the wrong order, or one
+   * corrupted leaf, neither of which the count can see.
+   */
+  root: `0x${string}`;
   /** Block the log was read through; the next sync's cursor starts after it. */
   latestBlock: bigint;
 };
@@ -121,17 +147,23 @@ export async function fetchLeaves(net: NetworkDef, fromBlock: bigint): Promise<C
   }
   leaves.sort((a, b) => a.index - b.index);
 
-  // Read the count at the same block the log was read through — a deposit landing
-  // between the two queries must not look like a hole in our log.
-  const totalLeaves = Number(
-    await pub.readContract({
+  // Read both at the same block the log was read through — a deposit landing
+  // between the queries must not look like a hole in our log.
+  const [totalLeaves, root] = await Promise.all([
+    pub.readContract({
       address: pool,
       abi: SHIELDED_POOL_ABI,
       functionName: "nextLeafIndex",
       blockNumber: latestBlock,
     }),
-  );
-  return { leaves, totalLeaves, latestBlock };
+    pub.readContract({
+      address: pool,
+      abi: SHIELDED_POOL_ABI,
+      functionName: "root",
+      blockNumber: latestBlock,
+    }),
+  ]);
+  return { leaves, totalLeaves: Number(totalLeaves), root, latestBlock };
 }
 
 /**

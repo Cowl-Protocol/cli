@@ -3,4 +3,10 @@ dist
 *.log
 .DS_Store
 .env
-circuits/target
+# Build output, except the proof fixtures the Solidity tests verify against.
+# Without them `forge test` cannot run from a clean clone, and that suite is the
+# only place the whole chain — note math, circuit, proof, verifier, pool — is
+# checked end to end. Regenerate with: node circuits/fixtures.mjs
+circuits/target/*
+!circuits/target/shield-fixture/
+!circuits/target/transfer-fixture/
