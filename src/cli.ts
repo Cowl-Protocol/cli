@@ -61,6 +61,7 @@ import { logo } from "./logo.js";
 import { deriveShieldedKeys, decodePaymentAddress, isPaymentAddress, type ShieldedKeys } from "./shielded/keys.js";
 import { tokenToField, tokenLabel } from "./shielded/note.js";
 import { shield as poolShield, unshield as poolUnshield, sendPrivate, balance as poolBalance, scan as poolScan, trade as poolTrade } from "./shielded/pool.js";
+import { planSend, planUnshield, loadPool, loadWallet, type Pool, type Wallet, type PlannedSpend } from "./shielded/pool.js";
 import { MARKETS, PROTOCOL_FEE_BPS, QUOTE_SYMBOL, WAD, priceInQuoteWad, quoteTrade, type Side } from "./shielded/market.js";
 
 /** The wordmark needs ~35 columns; fall back to the compact banner when narrow. */
@@ -195,10 +196,10 @@ async function shieldedKeys(): Promise<ShieldedKeys> {
  * Silence in either spot would let a simulation pass as real.
  */
 function localNotice(net: NetworkDef, kind: "op" | "view" = "op"): void {
-  void kind; // op-flavored sims cannot happen on pool networks — spends are gated
+  void kind; // on pool networks the ops run on chain, so this only ever fires view-side
   if (net.contracts.pool) {
     console.log(
-      `\n  ${warnMark()} ${muted("Deposits settle on")} ${bone(net.label)} ${muted("— unshield, private send and trade unlock when the spend circuits ship. Until then your notes hold value but cannot move.")}`,
+      `\n  ${warnMark()} ${muted("Shielded on")} ${bone(net.label)} ${muted("— deposits, private sends and unshields settle on chain. Private trading stays simulated until its circuit ships.")}`,
     );
     return;
   }
@@ -973,13 +974,26 @@ program
 
     // A zcowl: recipient is a private, in-pool transfer from your shielded balance.
     if (isPaymentAddress(to)) {
-      if (net.contracts.pool) spendsPending(net, "Private send");
       const sym = net.currency.symbol;
       const tokenField = tokenToField(token, sym);
       const recipient = decodePaymentAddress(to);
+      const value = parseEther(amount);
+      // Where the pool is live the send is a real join-split; elsewhere it is the sim.
+      if (net.contracts.pool) {
+        await spendOnChain(
+          net,
+          "Private send",
+          () => {
+            row("To", bone(to.slice(0, 22) + "…"));
+            row("Amount", `${bold(amount)} ${muted(tokenLabel(tokenField, sym))}`);
+          },
+          (pool, wallet, keys) => planSend(pool, wallet, keys, recipient, value, tokenField),
+        );
+        return;
+      }
       const keys = await shieldedKeys();
       try {
-        const res = sendPrivate(net.key, keys, recipient, parseEther(amount), tokenField);
+        const res = sendPrivate(net.key, keys, recipient, value, tokenField);
         heading("Private send");
         row("To", bone(to.slice(0, 22) + "…"));
         row("Amount", `${bold(amount)} ${muted(tokenLabel(tokenField, sym))}`);
@@ -1202,6 +1216,85 @@ async function shieldOnChain(
   }
 }
 
+/**
+ * The real on-chain spend, shared by private send and unshield. Mirrors
+ * shieldOnChain: sync, build a plan that mutates nothing, prove, publish each
+ * output's ciphertext, submit — then a second sync + scan records the result from
+ * the chain, so local state stays a projection of the pool and never a guess a
+ * later sync could contradict. `build` gets the freshly synced pool and wallet plus
+ * the unlocked account's address (the unshield payout) and returns the plan.
+ */
+async function spendOnChain(
+  net: NetworkDef,
+  headline: string,
+  showRows: () => void,
+  build: (pool: Pool, wallet: Wallet, keys: ShieldedKeys, payout: bigint) => PlannedSpend,
+): Promise<void> {
+  requireWallet();
+  const { proveTransfer } = await import("./shielded/prove.js");
+  const { submitSpend, poolAddress } = await import("./shielded/contract.js");
+  const { syncShieldedPool } = await import("./shielded/sync.js");
+  const { encryptNote, packCipher } = await import("./shielded/crypto.js");
+
+  heading(headline);
+  showRows();
+  row("Pool", muted(poolAddress(net)!));
+
+  const go = unwrap(await p.confirm({ message: "Sign and broadcast?", initialValue: false }));
+  if (!go) return;
+
+  // One passphrase unlocks the signer and the shielded keys the spend proves with.
+  const pass = await askPassphrase();
+  const { unlockKeystore } = await import("./keystore.js");
+  const account = unlockKeystore(pass);
+  const keys = deriveShieldedKeys(exportPrivateKey(pass));
+
+  const s = p.spinner();
+  s.start("Syncing the tree");
+  try {
+    // A spend is bound to the current root, so sync — and rescan for freshly spent
+    // notes — immediately before selecting inputs, then prove against that state.
+    await syncShieldedPool(net);
+    poolScan(net.key, keys);
+    const built = build(loadPool(net.key), loadWallet(net.key), keys, BigInt(account.address));
+
+    s.message("Proving");
+    const proof = await proveTransfer(built.plan);
+
+    // One ciphertext per output, in the order the proof appended them: the payment
+    // leg to the recipient's view key, the change to yours.
+    const ciphertexts = built.outputs.map((o) => packCipher(encryptNote(o.note, o.viewPubHex))) as [
+      `0x${string}`,
+      `0x${string}`,
+    ];
+
+    s.message("Broadcasting");
+    const receipt = await submitSpend(net, account, proof.spend, ciphertexts, proof.proof);
+
+    // Past here the spend is on chain; a local hiccup must not read as a failure.
+    try {
+      s.message("Syncing the tree");
+      await syncShieldedPool(net);
+      poolScan(net.key, keys);
+    } catch {
+      // The chain is authoritative — the next scan reconciles the change note.
+    }
+    s.stop(`${headline} confirmed`);
+
+    row(
+      "Spent",
+      muted(built.inputLeaves.length === 1 ? `note #${built.inputLeaves[0]}` : `${built.inputLeaves.length} notes`),
+    );
+    row("Output leaves", muted(`#${proof.insertIndex}, #${proof.insertIndex + 1}`));
+    row("Root", muted(proof.spend.newRoot));
+    row("Gas", muted(receipt.gasUsed.toLocaleString("en-US")));
+    ok(`${headline} on chain. ${muted(txLink(net, receipt.hash))}`);
+  } catch (e) {
+    s.stop("failed");
+    die((e as Error).message);
+  }
+}
+
 program
   .command("unshield")
   .description("move funds out of your shielded balance")
@@ -1209,13 +1302,27 @@ program
   .argument("[token]", "native symbol (default) or an ERC-20 address")
   .action(async (amount: string, token?: string) => {
     const { net } = ctx();
-    if (net.contracts.pool) spendsPending(net, "Unshield");
     const sym = net.currency.symbol;
     if (!(Number(amount) > 0)) die("Amount must be positive.");
     const tokenField = tokenToField(token ?? sym, sym);
+    const value = parseEther(amount);
+    // Where the pool is live the withdrawal is a real join-split with a public leg.
+    if (net.contracts.pool) {
+      const address = requireWallet();
+      await spendOnChain(
+        net,
+        "Unshield",
+        () => {
+          row("Amount", `${bold(amount)} ${muted(tokenLabel(tokenField, sym))}`);
+          row("To", muted(address));
+        },
+        (pool, wallet, keys, payout) => planUnshield(pool, wallet, keys, value, tokenField, payout),
+      );
+      return;
+    }
     const keys = await shieldedKeys();
     try {
-      const res = poolUnshield(net.key, keys, parseEther(amount), tokenField);
+      const res = poolUnshield(net.key, keys, value, tokenField);
       heading("Unshielded");
       row("Amount", `${bold(amount)} ${muted(tokenLabel(tokenField, sym))}`);
       row("Nullifiers", muted(res.nullifiers.length === 1 ? res.nullifiers[0]! : `${res.nullifiers.length} notes spent`));
