@@ -1091,6 +1091,7 @@ async function shieldOnChain(
   const { syncShieldedPool } = await import("./shielded/sync.js");
   const { appendProof } = await import("./shielded/tree.js");
   const { fieldToHex, hexToField } = await import("./shielded/field.js");
+  const { encryptNote, packCipher } = await import("./shielded/crypto.js");
 
   // Resolve what is actually being deposited before asking for a passphrase or
   // proving anything. Listed market symbols are sim-only sentinels with no contract
@@ -1166,6 +1167,9 @@ async function shieldOnChain(
       value,
       commitment: fieldToHex(c) as `0x${string}`,
       newRoot: fieldToHex(at.newRoot) as `0x${string}`,
+      // The deposit note is minted to you, so it is encrypted to your own view key —
+      // which is what lets another machine recover the deposit on a cold scan.
+      ciphertext: packCipher(encryptNote(note, keys.viewPubHex)),
       proof,
     });
 

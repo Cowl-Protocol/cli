@@ -13,11 +13,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { formatEther } from "viem";
 import { COWL_DIR } from "../paths.js";
-import { fieldToHex, hexToField } from "./field.js";
+import { fieldToHex, hexToField, randomField } from "./field.js";
 import { type Note, commitment, nullifier, newNote } from "./note.js";
 import { computeRoot } from "./tree.js";
-import { type NoteCipher, encryptNote, tryDecryptNote } from "./crypto.js";
+import { type NoteCipher, encryptNote, tryDecryptNote, unpackCipher } from "./crypto.js";
 import type { ShieldedKeys, PaymentAddress } from "./keys.js";
+import type { SpendPlan, SpendOutput } from "./prove.js";
 
 // ---- types ------------------------------------------------------------------
 
@@ -246,6 +247,119 @@ export function applyTrade(
   return { nullifiers, outputCommitment, changeCommitment, root: pool.root };
 }
 
+// ---- real-spend planning (non-mutating) -------------------------------------
+//
+// The sim ops above mutate the local pool the instant they run. The real on-chain
+// path cannot: it proves first and touches local state only once the chain confirms.
+// These builders select inputs and shape outputs WITHOUT mutating anything, hand a
+// plan to proveTransfer, and leave recording to the post-transaction sync + scan.
+
+export type PlannedSpend = {
+  /** Feed straight to proveTransfer. */
+  plan: SpendPlan;
+  /** The two outputs to encrypt and publish, in the order the proof appends them. */
+  outputs: { note: Note; viewPubHex: string }[];
+  /** Leaf indices of the real inputs being spent — for display. */
+  inputLeaves: number[];
+};
+
+/** Pick one or two unspent notes of `token` covering `need`; a join-split takes at most two. */
+function selectUpTo2(wallet: Wallet, token: bigint, need: bigint): StoredNote[] {
+  const avail = wallet.notes
+    .filter((n) => !n.spent && hexToField(n.token) === token)
+    .sort((a, b) => (hexToField(a.value) < hexToField(b.value) ? -1 : 1)); // ascending value
+  // The smallest single note that covers it, so the larger notes stay whole.
+  const single = avail.find((n) => hexToField(n.value) >= need);
+  if (single) return [single];
+  // Otherwise the two largest — a join-split cannot consume more than two inputs.
+  const two = avail.slice(-2);
+  const twoTotal = two.reduce((s, n) => s + hexToField(n.value), 0n);
+  if (two.length === 2 && twoTotal >= need) return two;
+  const have = avail.reduce((s, n) => s + hexToField(n.value), 0n);
+  if (have < need) {
+    throw new Error(`Insufficient shielded balance: need ${formatEther(need)}, have ${formatEther(have)}.`);
+  }
+  throw new Error(
+    `Shielded balance is too fragmented: no two notes cover ${formatEther(need)}. Consolidate first by sending yourself a note.`,
+  );
+}
+
+const outParts = (n: Note): SpendOutput => ({ mpk: n.mpk, value: n.value, blinding: n.blinding });
+
+function planInputs(inputs: StoredNote[]): SpendPlan["inputs"] {
+  return inputs.map((n) => ({ value: hexToField(n.value), blinding: hexToField(n.blinding), leafIndex: n.leafIndex }));
+}
+
+/** Plan a private send: `value` to the recipient, change back to you, no public leg. */
+export function planSend(
+  pool: Pool,
+  wallet: Wallet,
+  keys: ShieldedKeys,
+  recipient: PaymentAddress,
+  value: bigint,
+  token: bigint,
+): PlannedSpend {
+  const inputs = selectUpTo2(wallet, token, value);
+  const total = inputs.reduce((s, n) => s + hexToField(n.value), 0n);
+  const out0: Note = { value, token, mpk: recipient.mpk, blinding: randomField() };
+  const out1: Note = { value: total - value, token, mpk: keys.mpk, blinding: randomField() };
+  return {
+    plan: {
+      sk: keys.sk,
+      nk: keys.nk,
+      token,
+      inputs: planInputs(inputs),
+      outputs: [outParts(out0), outParts(out1)],
+      leaves: pool.commitments.map(hexToField),
+      publicToken: token,
+      publicValue: 0n,
+      fee: 0n,
+      recipient: 0n,
+      relayer: 0n,
+    },
+    outputs: [
+      { note: out0, viewPubHex: recipient.viewPubHex },
+      { note: out1, viewPubHex: keys.viewPubHex },
+    ],
+    inputLeaves: inputs.map((n) => n.leafIndex),
+  };
+}
+
+/** Plan an unshield: `value` leaves to `payout` (your public address as a field), change stays private. */
+export function planUnshield(
+  pool: Pool,
+  wallet: Wallet,
+  keys: ShieldedKeys,
+  value: bigint,
+  token: bigint,
+  payout: bigint,
+): PlannedSpend {
+  const inputs = selectUpTo2(wallet, token, value);
+  const total = inputs.reduce((s, n) => s + hexToField(n.value), 0n);
+  const out0: Note = { value: total - value, token, mpk: keys.mpk, blinding: randomField() };
+  const out1: Note = { value: 0n, token, mpk: keys.mpk, blinding: randomField() };
+  return {
+    plan: {
+      sk: keys.sk,
+      nk: keys.nk,
+      token,
+      inputs: planInputs(inputs),
+      outputs: [outParts(out0), outParts(out1)],
+      leaves: pool.commitments.map(hexToField),
+      publicToken: token,
+      publicValue: value,
+      fee: 0n,
+      recipient: payout,
+      relayer: 0n,
+    },
+    outputs: [
+      { note: out0, viewPubHex: keys.viewPubHex },
+      { note: out1, viewPubHex: keys.viewPubHex },
+    ],
+    inputLeaves: inputs.map((n) => n.leafIndex),
+  };
+}
+
 // ---- storage layer ----------------------------------------------------------
 
 // The pool is the shared ledger; point COWL_POOL_DIR at a shared path to run a
@@ -265,7 +379,7 @@ export function savePool(net: string, pool: Pool): void {
   ensureDir(POOL_DIR);
   writeFileSync(join(POOL_DIR, `pool-${net}.json`), JSON.stringify(pool, null, 2) + "\n", { mode: 0o600 });
 }
-function loadWallet(net: string): Wallet {
+export function loadWallet(net: string): Wallet {
   const path = join(NOTES_DIR, `notes-${net}.json`);
   return existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Wallet) : emptyWallet();
 }
@@ -306,7 +420,8 @@ export class ChainDrift extends Error {}
  */
 export function applyChainLeaves(
   pool: Pool,
-  leaves: { index: number; commitment: string }[],
+  leaves: { index: number; commitment: string; cipher?: string }[],
+  nullifiers: string[],
   totalLeaves: number,
   chainRoot?: string,
 ): number {
@@ -322,8 +437,18 @@ export function applyChainLeaves(
       throw new ChainDrift(`Leaf #${leaf.index} arrived before #${pool.commitments.length}.`);
     }
     pool.commitments.push(leaf.commitment);
-    pool.ciphertexts.push(null); // the chain publishes commitments, not notes
+    pool.ciphertexts.push(leaf.cipher ? unpackCipher(leaf.cipher) : null);
     appended++;
+  }
+
+  // The spent set is a chain log too — merge in any new Nullified so a note the
+  // pool nullified (mine or anyone's) shows as spent after a plain incremental sync.
+  const knownNulls = new Set(pool.nullifiers);
+  for (const nf of nullifiers) {
+    if (!knownNulls.has(nf)) {
+      pool.nullifiers.push(nf);
+      knownNulls.add(nf);
+    }
   }
   if (pool.commitments.length !== totalLeaves) {
     throw new ChainDrift(
@@ -345,14 +470,30 @@ export function applyChainLeaves(
  * Ciphertexts are carried across by commitment value, not by position, so stale
  * local state can never leave a note glued to someone else's leaf.
  */
-export function alignPoolToChain(pool: Pool, chainCommitments: string[]): void {
-  const cipherByCommitment = new Map<string, NoteCipher>();
+export function alignPoolToChain(
+  pool: Pool,
+  leaves: { index: number; commitment: string; cipher?: string }[],
+  nullifiers: string[],
+): void {
+  // The chain now carries the ciphertext for every leaf, so it is the source of
+  // truth. A locally-held cipher (a note we just created, not yet echoed back) is
+  // kept only as a fallback for a leaf the chain query somehow returned without one.
+  const localCipher = new Map<string, NoteCipher>();
   pool.commitments.forEach((c, i) => {
     const cipher = pool.ciphertexts[i];
-    if (cipher) cipherByCommitment.set(c, cipher);
+    if (cipher) localCipher.set(c, cipher);
   });
-  pool.commitments = [...chainCommitments];
-  pool.ciphertexts = pool.commitments.map((c) => cipherByCommitment.get(c) ?? null);
+  const commitments: string[] = [];
+  const ciphertexts: (NoteCipher | null)[] = [];
+  for (const leaf of [...leaves].sort((a, b) => a.index - b.index)) {
+    commitments[leaf.index] = leaf.commitment;
+    ciphertexts[leaf.index] = leaf.cipher
+      ? unpackCipher(leaf.cipher)
+      : (localCipher.get(leaf.commitment) ?? null);
+  }
+  pool.commitments = commitments;
+  pool.ciphertexts = ciphertexts;
+  pool.nullifiers = [...new Set(nullifiers)];
   pool.root = fieldToHex(computeRoot(pool.commitments.map(hexToField)));
 }
 

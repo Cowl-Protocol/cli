@@ -45,7 +45,7 @@ export async function syncShieldedPool(
     const from = pool.syncedBlock !== undefined ? BigInt(pool.syncedBlock) + 1n : deployBlock;
     try {
       const chain = await fetchLeaves(net, from);
-      applyChainLeaves(pool, chain.leaves, chain.totalLeaves, chain.root);
+      applyChainLeaves(pool, chain.leaves, chain.nullifiers, chain.totalLeaves, chain.root);
       pool.syncedBlock = chain.latestBlock.toString();
     } catch (e) {
       if (!(e instanceof ChainDrift)) throw e;
@@ -78,18 +78,16 @@ async function replayEverything(net: NetworkDef, pool: ReturnType<typeof loadPoo
         `The RPC may be truncating history — try another with: cowl config set rpcUrl <url>`,
     );
   }
-  alignPoolToChain(pool, commitments);
+  // The chain is the authority on spends too: alignPoolToChain rebuilds the spent
+  // set from the Nullified events this replay pulled, which also clears any sim-era
+  // nullifier that had been wrongly pinning a real note as spent.
+  alignPoolToChain(pool, all.leaves, all.nullifiers);
   if (pool.root !== all.root) {
     throw new Error(
       `Replayed ${all.totalLeaves} leaves but reached root ${pool.root}, and the pool reports ${all.root}. ` +
         `The RPC may be serving an incomplete log — try another with: cowl config set rpcUrl <url>`,
     );
   }
-  // The chain is the authority on spends too. Rebuilding the spent set means
-  // replaying the contract's Nullified events; until the CLI can actually spend,
-  // clearing it is both correct and the thing that erases a sim-era nullifier
-  // wrongly pinning a real note as spent.
-  pool.nullifiers = [];
   pool.syncedBlock = all.latestBlock.toString();
   return pool.commitments.join(",") !== beforeCommitments;
 }

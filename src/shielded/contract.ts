@@ -12,7 +12,7 @@ import { decodeEventLog } from "viem";
 import type { Address, Hash, PrivateKeyAccount, TransactionReceipt } from "viem";
 import { publicClient, walletClient } from "../chain.js";
 import { toViemChain, type NetworkDef } from "../networks.js";
-import type { ShieldProof } from "./prove.js";
+import type { ShieldProof, SpendStruct } from "./prove.js";
 
 export const SHIELDED_POOL_ABI = [
   {
@@ -24,6 +24,32 @@ export const SHIELDED_POOL_ABI = [
       { name: "value", type: "uint256" },
       { name: "commitment", type: "bytes32" },
       { name: "newRoot", type: "bytes32" },
+      { name: "ciphertext", type: "bytes" },
+      { name: "proof", type: "bytes" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "spend",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "s",
+        type: "tuple",
+        components: [
+          { name: "membershipRoot", type: "bytes32" },
+          { name: "nullifiers", type: "bytes32[2]" },
+          { name: "commitments", type: "bytes32[2]" },
+          { name: "newRoot", type: "bytes32" },
+          { name: "token", type: "uint256" },
+          { name: "value", type: "uint256" },
+          { name: "fee", type: "uint256" },
+          { name: "recipient", type: "address" },
+          { name: "relayer", type: "address" },
+        ],
+      },
+      { name: "ciphertexts", type: "bytes[2]" },
       { name: "proof", type: "bytes" },
     ],
     outputs: [],
@@ -41,6 +67,14 @@ export const SHIELDED_POOL_ABI = [
     inputs: [
       { name: "commitment", type: "bytes32", indexed: true },
       { name: "leafIndex", type: "uint32", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "NoteCipher",
+    inputs: [
+      { name: "leafIndex", type: "uint32", indexed: false },
+      { name: "ciphertext", type: "bytes", indexed: false },
     ],
   },
   {
@@ -78,6 +112,8 @@ export async function submitShield(
     commitment: `0x${string}`;
     /** Root the tree reaches once this note is appended — proven, not asserted. */
     newRoot: `0x${string}`;
+    /** The note encrypted to the depositor's own view key, packed to 158 bytes. */
+    ciphertext: `0x${string}`;
     proof: ShieldProof;
   },
 ): Promise<ShieldReceipt> {
@@ -91,7 +127,7 @@ export async function submitShield(
     address: pool,
     abi: SHIELDED_POOL_ABI,
     functionName: "shield",
-    args: [args.token, args.value, args.commitment, args.newRoot, args.proof.proof],
+    args: [args.token, args.value, args.commitment, args.newRoot, args.ciphertext, args.proof.proof],
     value: args.token === 0n ? args.value : 0n,
   });
 
@@ -110,9 +146,77 @@ export async function submitShield(
   };
 }
 
+export type SpendReceipt = {
+  hash: Hash;
+  gasUsed: bigint;
+  blockNumber: bigint;
+  /** Both output leaves the contract assigned, paired to their commitment. */
+  outputs: { commitment: `0x${string}`; leafIndex: number }[];
+};
+
+/**
+ * Submit a join-split spend. The Spend struct and the two ciphertexts come from
+ * proveTransfer and the two output notes; on success the contract has nullified
+ * the inputs, appended both outputs, and paid out any public leg. Sync before
+ * proving — the proof is bound to the current root, so a spend built against a
+ * stale root reverts rather than corrupting anything.
+ */
+export async function submitSpend(
+  net: NetworkDef,
+  account: PrivateKeyAccount,
+  spend: SpendStruct,
+  ciphertexts: [`0x${string}`, `0x${string}`],
+  proof: `0x${string}`,
+): Promise<SpendReceipt> {
+  const pool = poolAddress(net);
+  if (!pool) throw new Error(`No shielded pool deployed on ${net.label}.`);
+
+  const wallet = walletClient(net, account);
+  const hash = await wallet.writeContract({
+    account,
+    chain: toViemChain(net),
+    address: pool,
+    abi: SHIELDED_POOL_ABI,
+    functionName: "spend",
+    args: [
+      {
+        membershipRoot: spend.membershipRoot,
+        nullifiers: [spend.nullifiers[0], spend.nullifiers[1]],
+        commitments: [spend.commitments[0], spend.commitments[1]],
+        newRoot: spend.newRoot,
+        token: spend.token,
+        value: spend.value,
+        fee: spend.fee,
+        recipient: fieldToAddress(spend.recipient),
+        relayer: fieldToAddress(spend.relayer),
+      },
+      ciphertexts,
+      proof,
+    ],
+  });
+
+  const receipt = await publicClient(net).waitForTransactionReceipt({ hash });
+  if (receipt.status !== "success") throw new Error(`Spend transaction reverted (${hash}).`);
+
+  return {
+    hash,
+    gasUsed: receipt.gasUsed,
+    blockNumber: receipt.blockNumber,
+    outputs: readAllNoteCommitted(receipt, pool),
+  };
+}
+
+/** A field-encoded address, the way the proof carries it, back to a 20-byte address. */
+function fieldToAddress(x: bigint): Address {
+  return `0x${x.toString(16).padStart(40, "0")}` as Address;
+}
+
+export type ChainLeaf = { index: number; commitment: `0x${string}`; cipher?: `0x${string}` };
 export type ChainLeaves = {
-  /** NoteCommitted leaves seen from `fromBlock` on, in leaf-index order. */
-  leaves: { index: number; commitment: `0x${string}` }[];
+  /** NoteCommitted leaves from `fromBlock` on, in leaf-index order, each with its NoteCipher if one was emitted. */
+  leaves: ChainLeaf[];
+  /** Nullifiers seen in the same range — Nullified events, the spent set rebuilt from the chain. */
+  nullifiers: `0x${string}`[];
   /** The contract's own leaf count — the yardstick a sync checks itself against. */
   totalLeaves: number;
   /**
@@ -137,15 +241,32 @@ export async function fetchLeaves(net: NetworkDef, fromBlock: bigint): Promise<C
   const pub = publicClient(net);
 
   const latestBlock = await pub.getBlockNumber();
-  const logs = fromBlock > latestBlock ? [] : await eventsChunked(pub, pool, fromBlock, latestBlock);
+  const logs = fromBlock > latestBlock ? [] : await fetchPoolEvents(pub, pool, fromBlock, latestBlock);
 
-  const leaves: ChainLeaves["leaves"] = [];
+  // One log query returns every pool event; partition it into leaves, their
+  // ciphertexts (paired by leaf index), and nullifiers.
+  const leafByIndex = new Map<number, ChainLeaf>();
+  const cipherByIndex = new Map<number, `0x${string}`>();
+  const nullifiers: `0x${string}`[] = [];
   for (const log of logs) {
-    const { commitment, leafIndex } = log.args;
-    if (commitment === undefined || leafIndex === undefined) continue;
-    leaves.push({ index: Number(leafIndex), commitment });
+    if (log.eventName === "NoteCommitted") {
+      const commitment = log.args.commitment as `0x${string}` | undefined;
+      const leafIndex = log.args.leafIndex as number | undefined;
+      if (commitment === undefined || leafIndex === undefined) continue;
+      leafByIndex.set(Number(leafIndex), { index: Number(leafIndex), commitment });
+    } else if (log.eventName === "NoteCipher") {
+      const leafIndex = log.args.leafIndex as number | undefined;
+      const ciphertext = log.args.ciphertext as `0x${string}` | undefined;
+      if (leafIndex === undefined || ciphertext === undefined) continue;
+      cipherByIndex.set(Number(leafIndex), ciphertext);
+    } else if (log.eventName === "Nullified") {
+      const nullifier = log.args.nullifier as `0x${string}` | undefined;
+      if (nullifier !== undefined) nullifiers.push(nullifier);
+    }
   }
-  leaves.sort((a, b) => a.index - b.index);
+  const leaves: ChainLeaf[] = [...leafByIndex.values()]
+    .map((l) => ({ ...l, cipher: cipherByIndex.get(l.index) }))
+    .sort((a, b) => a.index - b.index);
 
   // Read both at the same block the log was read through — a deposit landing
   // between the queries must not look like a hole in our log.
@@ -163,7 +284,7 @@ export async function fetchLeaves(net: NetworkDef, fromBlock: bigint): Promise<C
       blockNumber: latestBlock,
     }),
   ]);
-  return { leaves, totalLeaves: Number(totalLeaves), root, latestBlock };
+  return { leaves, nullifiers, totalLeaves: Number(totalLeaves), root, latestBlock };
 }
 
 /**
@@ -178,20 +299,17 @@ export async function fetchLeaves(net: NetworkDef, fromBlock: bigint): Promise<C
  * crawl. Blind halving is only the fallback for providers that keep the cap to
  * themselves.
  */
-async function eventsChunked(
+type PoolLog = { eventName: string; args: Record<string, unknown> };
+
+async function fetchPoolEvents(
   pub: ReturnType<typeof publicClient>,
   pool: Address,
   fromBlock: bigint,
   toBlock: bigint,
-): Promise<{ args: { commitment?: `0x${string}`; leafIndex?: number } }[]> {
+): Promise<PoolLog[]> {
   try {
-    return await pub.getContractEvents({
-      address: pool,
-      abi: SHIELDED_POOL_ABI,
-      eventName: "NoteCommitted",
-      fromBlock,
-      toBlock,
-    });
+    const logs = await pub.getContractEvents({ address: pool, abi: SHIELDED_POOL_ABI, fromBlock, toBlock });
+    return logs as unknown as PoolLog[];
   } catch (e) {
     const msg = (e as Error).message;
     const named = /(?:blocks?\D{0,20}|is )(\d{2,8})(?:\s*blocks?)?/i.exec(msg);
@@ -208,11 +326,11 @@ async function eventsChunked(
       windows.push([start, end]);
     }
 
-    const out: { args: { commitment?: `0x${string}`; leafIndex?: number } }[] = [];
+    const out: PoolLog[] = [];
     const GROUP = 6; // per roundtrip, small enough to stay under rate limits
     for (let i = 0; i < windows.length; i += GROUP) {
       const group = windows.slice(i, i + GROUP);
-      const results = await Promise.all(group.map(([a, b]) => eventsChunked(pub, pool, a, b)));
+      const results = await Promise.all(group.map(([a, b]) => fetchPoolEvents(pub, pool, a, b)));
       for (const r of results) out.push(...r);
     }
     return out;
@@ -238,6 +356,25 @@ function readNoteCommitted(
     }
   }
   return null;
+}
+
+/** Every NoteCommitted in a receipt, in log order — a spend emits two. */
+function readAllNoteCommitted(
+  receipt: TransactionReceipt,
+  pool: Address,
+): { commitment: `0x${string}`; leafIndex: number }[] {
+  const out: { commitment: `0x${string}`; leafIndex: number }[] = [];
+  for (const log of receipt.logs) {
+    if (log.address.toLowerCase() !== pool.toLowerCase()) continue;
+    try {
+      const decoded = decodeEventLog({ abi: SHIELDED_POOL_ABI, data: log.data, topics: log.topics });
+      if (decoded.eventName !== "NoteCommitted") continue;
+      out.push({ commitment: decoded.args.commitment, leafIndex: Number(decoded.args.leafIndex) });
+    } catch {
+      // Not one of ours.
+    }
+  }
+  return out;
 }
 
 /**
