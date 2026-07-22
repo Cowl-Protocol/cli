@@ -40,7 +40,13 @@ contract ShieldedPool {
     uint32 public nextLeafIndex;
     mapping(bytes32 => bool) public committed;
 
-    event NoteCommitted(bytes32 indexed commitment, uint32 leafIndex, uint256 token, uint256 value);
+    /// Only what a client needs to rebuild the tree. The deposit's token and value
+    /// are deliberately absent: they are already public on the deposit path
+    /// (calldata, msg.value, the ERC-20 Transfer), so repeating them in the log
+    /// bought nothing and left a permanently indexed, trivially queryable record
+    /// beside the commitment. Deposits are not private — but a spend of this note
+    /// later should not be handed a matching amount to be joined against.
+    event NoteCommitted(bytes32 indexed commitment, uint32 leafIndex);
 
     error DuplicateCommitment();
     error TreeFull();
@@ -87,6 +93,6 @@ contract ShieldedPool {
             }
         }
 
-        emit NoteCommitted(commitment, leafIndex, token, value);
+        emit NoteCommitted(commitment, leafIndex);
     }
 }

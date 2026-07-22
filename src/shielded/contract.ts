@@ -33,8 +33,6 @@ export const SHIELDED_POOL_ABI = [
     inputs: [
       { name: "commitment", type: "bytes32", indexed: true },
       { name: "leafIndex", type: "uint32", indexed: false },
-      { name: "token", type: "uint256", indexed: false },
-      { name: "value", type: "uint256", indexed: false },
     ],
   },
 ] as const;

@@ -28,7 +28,7 @@ contract ShieldedPoolTest is Test {
     MockVerifier verifier;
     ShieldedPool pool;
 
-    event NoteCommitted(bytes32 indexed commitment, uint32 leafIndex, uint256 token, uint256 value);
+    event NoteCommitted(bytes32 indexed commitment, uint32 leafIndex);
 
     function setUp() public {
         verifier = new MockVerifier();
@@ -37,7 +37,7 @@ contract ShieldedPoolTest is Test {
 
     function test_shield_native_commits_and_emits() public {
         vm.expectEmit();
-        emit NoteCommitted(COMMITMENT, 0, 0, 3);
+        emit NoteCommitted(COMMITMENT, 0);
         pool.shield{value: 3}(0, 3, COMMITMENT, "");
         assertTrue(pool.committed(COMMITMENT));
         assertEq(pool.nextLeafIndex(), 1);

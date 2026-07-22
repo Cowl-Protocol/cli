@@ -43,6 +43,15 @@ export const NETWORKS: Record<string, NetworkDef> = {
     testnet: true,
     // Deployed 2026-07-22. The pool is deposit-only for now: `shield` proves and
     // settles on chain, everything else still runs against the local tree.
+    //
+    // STALE — redeploy before using. This instance predates dropping token+value
+    // from NoteCommitted, so it emits the old four-field event under a different
+    // topic hash and this client decodes zero leaves from it (the contract reports
+    // 2, both smoke-test deposits, so a sync sees a hole and fails). Redeploy
+    // against the existing verifier and update the address and block here:
+    //
+    //   VERIFIER=0x72890b8f6f92428949eC84F88FB09718Af9D0328 forge script script/Deploy.s.sol \
+    //     --rpc-url https://46630.rpc.thirdweb.com --account cowl-deployer --broadcast
     contracts: { pool: "0x5DE68a552cf7CcE72d4CC7C1918278B42171809b", poolDeployBlock: 92184357n },
   },
   "robinhood-mainnet": {
