@@ -1,10 +1,14 @@
 // BN254 scalar field (Fr) helpers. Every value that flows through a commitment,
 // nullifier, or Merkle node lives in this field, so the local pool computes the
 // exact same numbers the Noir circuit will prove over later.
+//
+// The hash is Poseidon2 — Barretenberg-native, ~53x fewer constraints in an
+// UltraHonk circuit than circomlib-style Poseidon (see cli/circuits/). Parity
+// with Noir's poseidon::poseidon2 is pinned by circuits/poseidon-parity.
 import { randomBytes } from "node:crypto";
 import { keccak_256 } from "@noble/hashes/sha3";
 import { bytesToHex } from "@noble/hashes/utils";
-import { poseidon1, poseidon2, poseidon3, poseidon4 } from "poseidon-lite";
+import { poseidon2Hash } from "@zkpassport/poseidon2";
 
 /** BN254 scalar field modulus. */
 export const FR = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
@@ -36,20 +40,12 @@ export function randomField(): bigint {
   return bytesToField(randomBytes(32));
 }
 
-/** Poseidon over 1–4 field inputs, chosen by arity. */
+/** Poseidon2 over 1–4 field inputs (variable-length sponge, matches Noir). */
 export function poseidon(inputs: bigint[]): bigint {
-  switch (inputs.length) {
-    case 1:
-      return poseidon1(inputs);
-    case 2:
-      return poseidon2(inputs);
-    case 3:
-      return poseidon3(inputs);
-    case 4:
-      return poseidon4(inputs);
-    default:
-      throw new Error(`poseidon arity ${inputs.length} unsupported`);
+  if (inputs.length < 1 || inputs.length > 4) {
+    throw new Error(`poseidon arity ${inputs.length} unsupported`);
   }
+  return poseidon2Hash(inputs);
 }
 
 /** 0x-prefixed, zero-padded 32-byte hex of a field element. */

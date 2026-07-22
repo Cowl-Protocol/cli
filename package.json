@@ -48,9 +48,9 @@
     "@clack/prompts": "^0.7.0",
     "@noble/curves": "^1.4.0",
     "@noble/hashes": "^1.4.0",
+    "@zkpassport/poseidon2": "^0.6.2",
     "commander": "^12.1.0",
     "picocolors": "^1.0.1",
-    "poseidon-lite": "^0.3.0",
     "viem": "^2.21.0"
   },
   "devDependencies": {

@@ -1,0 +1,2 @@
+[workspace]
+members = ["poseidon-parity", "bench-circomlib", "bench-poseidon2", "shield"]
