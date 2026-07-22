@@ -10,20 +10,26 @@ import {
 import type { PublicClient, WalletClient, PrivateKeyAccount, Address, Hash } from "viem";
 import { toViemChain, type NetworkDef } from "./networks.js";
 
+// One JSON-RPC batch per 16ms window instead of a request per call. Portfolio fires
+// half a dozen reads at once (balance + 3 per tracked token), and public RPCs
+// rate-limit per request — unbatched, those bursts trip the 429 retry-backoff and a
+// portfolio read stretches into tens of seconds.
+const TRANSPORT_BATCH = { batch: { wait: 16 } } as const;
+
 export function publicClient(net: NetworkDef): PublicClient {
   if (!net.rpcUrl) {
     throw new Error(
       `No RPC URL for "${net.key}". Set one: cowl config set rpcUrl <url>`,
     );
   }
-  return createPublicClient({ chain: toViemChain(net), transport: http(net.rpcUrl) });
+  return createPublicClient({ chain: toViemChain(net), transport: http(net.rpcUrl, TRANSPORT_BATCH) });
 }
 
 export function walletClient(net: NetworkDef, account: PrivateKeyAccount): WalletClient {
   if (!net.rpcUrl) {
     throw new Error(`No RPC URL for "${net.key}". Set one: cowl config set rpcUrl <url>`);
   }
-  return createWalletClient({ account, chain: toViemChain(net), transport: http(net.rpcUrl) });
+  return createWalletClient({ account, chain: toViemChain(net), transport: http(net.rpcUrl, TRANSPORT_BATCH) });
 }
 
 // Minimal ERC-20 ABI (reads + transfer).
