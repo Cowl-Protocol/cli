@@ -983,21 +983,22 @@ program
       const recipient = decodePaymentAddress(to);
       // Where the pool is live the send is a real join-split; elsewhere it is the sim.
       if (net.contracts.pool) {
-        const { value, label } = await resolveBoundaryAmount(net, amount, tokenField, sym);
+        const { value, decimals, label } = await resolveBoundaryAmount(net, amount, tokenField, sym);
         // Relayed, the sender's wallet appears nowhere: the relayer submits and
         // takes its fee from the same shielded notes, bound into the proof. The
         // fee payout is the one public artifact — it names the token, never the
         // amount or the parties.
         let quote: RelayQuote | null = null;
         if (opts.relay) {
-          if (tokenField !== 0n) die(`Relayed sends carry the native coin. Send ${sym}, or drop --relay.`);
-          quote = await fetchQuote(opts.relay);
+          const tokenAddr =
+            tokenField === 0n ? undefined : (`0x${tokenField.toString(16).padStart(40, "0")}` as `0x${string}`);
+          quote = await fetchQuote(opts.relay, tokenAddr);
           if (quote.chainId !== net.chainId) {
             die(`That relayer serves chain ${quote.chainId}, not ${net.chainId}.`);
           }
         }
         const relayerField = quote ? BigInt(quote.relayer) : 0n;
-        const fee = quote ? quote.feeWei : 0n;
+        const fee = quote ? quote.fee : 0n;
         await spendOnChain(
           net,
           "Private send",
@@ -1006,7 +1007,7 @@ program
             row("Amount", `${bold(amount)} ${muted(label)}`);
             if (quote) {
               row("Relayer", muted(quote.relayer));
-              row("Fee", muted(`${formatEther(fee)} ${sym}, paid from shielded funds`));
+              row("Fee", muted(`${formatUnits(fee, decimals)} ${label}, paid from shielded funds`));
             }
           },
           (pool, wallet, keys) =>
@@ -1456,17 +1457,20 @@ program
 
       // A relayed withdrawal pays the relayer's fee out of the same shielded
       // notes, one fee per spend, all bound into each proof before it leaves.
+      // The fee is in the spend's own token — the relayer prices non-native
+      // ones through the venue quoter.
       let quote: RelayQuote | null = null;
       if (opts.relay) {
-        if (tokenField !== 0n) die(`Relayed unshields carry the native coin. Withdraw ${sym}, or drop --relay.`);
-        quote = await fetchQuote(opts.relay);
+        const tokenAddr =
+          tokenField === 0n ? undefined : (`0x${tokenField.toString(16).padStart(40, "0")}` as `0x${string}`);
+        quote = await fetchQuote(opts.relay, tokenAddr);
         if (quote.chainId !== net.chainId) {
           die(`That relayer serves chain ${quote.chainId}, not ${net.chainId}.`);
         }
       }
 
       const relayerField = quote ? BigInt(quote.relayer) : 0n;
-      const feePerSpend = quote ? quote.feeWei : 0n;
+      const feePerSpend = quote ? quote.fee : 0n;
       await spendOnChain(
         net,
         "Unshield",
@@ -1485,8 +1489,8 @@ program
               "Fee",
               muted(
                 parts.length > 1
-                  ? `${formatEther(feePerSpend)} ${sym} × ${parts.length} = ${formatEther(feePerSpend * BigInt(parts.length))} ${sym}, paid from shielded funds`
-                  : `${formatEther(feePerSpend)} ${sym}, paid from shielded funds`,
+                  ? `${formatUnits(feePerSpend, decimals)} ${label} × ${parts.length} = ${formatUnits(feePerSpend * BigInt(parts.length), decimals)} ${label}, paid from shielded funds`
+                  : `${formatUnits(feePerSpend, decimals)} ${label}, paid from shielded funds`,
               ),
             );
           }

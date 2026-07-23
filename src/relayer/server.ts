@@ -10,11 +10,39 @@
 // v1 relays native-coin spends. An ERC-20 fee leg pays in that token, which
 // needs a price to convert gas into — a later problem, not a this-week one.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { PrivateKeyAccount } from "viem";
+import type { Address, PrivateKeyAccount } from "viem";
 import type { NetworkDef } from "../networks.js";
 import { publicClient } from "../chain.js";
 import { poolAddress, simulateSpend, submitSpend } from "../shielded/contract.js";
 import { decodeSpend } from "./client.js";
+
+/** The V3 quoter surface used to price a fee in a non-native token. */
+const QUOTER_ABI = [
+  {
+    type: "function",
+    name: "quoteExactOutputSingle",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "tokenIn", type: "address" },
+          { name: "tokenOut", type: "address" },
+          { name: "amount", type: "uint256" },
+          { name: "fee", type: "uint24" },
+          { name: "sqrtPriceLimitX96", type: "uint160" },
+        ],
+      },
+    ],
+    outputs: [
+      { name: "amountIn", type: "uint256" },
+      { name: "sqrtPriceX96After", type: "uint160" },
+      { name: "initializedTicksCrossed", type: "uint32" },
+      { name: "gasEstimate", type: "uint256" },
+    ],
+  },
+] as const;
 
 /** Observed spend gas is ~4.6M; quote a spend's worth with headroom. */
 const GAS_PER_SPEND = 5_000_000n;
@@ -41,6 +69,24 @@ export type RelayEvent =
 async function feeNow(net: NetworkDef, marginPct: number): Promise<bigint> {
   const gasPrice = await publicClient(net).getGasPrice();
   return (gasPrice * GAS_PER_SPEND * BigInt(100 + marginPct)) / 100n;
+}
+
+/**
+ * Price `feeWei` worth of gas in `token`, by asking the venue quoter how much
+ * of the token buys exactly that much WETH. The fee leg of an ERC-20 spend
+ * pays in that token, so this is what makes relaying one worth the gas.
+ */
+async function feeInToken(net: NetworkDef, token: Address, feeWei: bigint): Promise<bigint> {
+  const quoter = net.contracts.quoter;
+  const weth = net.contracts.weth;
+  if (!quoter || !weth) throw new Error("This relayer has no price source for that token — withdraw the native coin, or drop --relay.");
+  const { result } = await publicClient(net).simulateContract({
+    address: quoter,
+    abi: QUOTER_ABI,
+    functionName: "quoteExactOutputSingle",
+    args: [{ tokenIn: token, tokenOut: weth, amount: feeWei, fee: 3000, sqrtPriceLimitX96: 0n }],
+  });
+  return result[0];
 }
 
 function send(res: ServerResponse, status: number, body: unknown): void {
@@ -88,19 +134,28 @@ export function startRelayServer(
   const server = createServer((req, res) => {
     void (async () => {
       try {
-        if (req.method === "GET" && req.url === "/quote") {
+        const url = new URL(req.url ?? "/", "http://relay");
+        if (req.method === "GET" && url.pathname === "/quote") {
           const feeWei = await feeNow(net, opts.marginPct);
+          // ?token=0x… prices the fee in that ERC-20 via the venue quoter; the
+          // fee leg of a spend pays in the spend's own token.
+          const tokenParam = url.searchParams.get("token");
+          const token = tokenParam && tokenParam !== "0" ? (tokenParam as Address) : null;
+          if (token && !/^0x[0-9a-fA-F]{40}$/.test(token)) throw new Error("Bad token address.");
+          const fee = token ? await feeInToken(net, token, feeWei) : feeWei;
           onEvent({ kind: "quote", feeWei });
           send(res, 200, {
             relayer: account.address,
             feeWei: feeWei.toString(),
+            token: token ?? "0",
+            fee: fee.toString(),
             chainId: net.chainId,
             pool,
           });
           return;
         }
 
-        if (req.method === "POST" && req.url === "/relay") {
+        if (req.method === "POST" && url.pathname === "/relay") {
           const raw = await readBody(req, 2 * 1024 * 1024);
           const parsed = JSON.parse(raw) as { spend?: never; ciphertexts?: [string, string]; proof?: string };
           const spend = decodeSpend(parsed.spend as never);
@@ -111,13 +166,18 @@ export function startRelayServer(
             throw new Error("Bad ciphertexts.");
           }
 
-          // The fee leg must actually pay this relayer, in the native coin,
-          // enough to cover the gas it is about to spend.
+          // The fee leg must actually pay this relayer, in the spend's own
+          // token, enough to cover the gas it is about to spend. Non-native
+          // fees are priced through the venue quoter.
           if (spend.relayer !== BigInt(account.address)) throw new Error("Spend does not pay this relayer.");
-          if (spend.token !== 0n) throw new Error("This relayer takes native-coin spends only.");
-          const floor = await feeNow(net, 0);
+          if (spend.token > (1n << 160n) - 1n) throw new Error("Bad token in spend.");
+          const floorWei = await feeNow(net, 0);
+          const floor =
+            spend.token === 0n
+              ? floorWei
+              : await feeInToken(net, `0x${spend.token.toString(16).padStart(40, "0")}` as Address, floorWei);
           if (spend.fee < floor) {
-            throw new Reprove(`Fee too low: the spend pays ${spend.fee} wei, gas costs ${floor}. Re-quote and reprove.`);
+            throw new Reprove(`Fee too low: the spend pays ${spend.fee}, gas costs ${floor}. Re-quote and reprove.`);
           }
           if (queued >= MAX_QUEUE) {
             onEvent({ kind: "rejected", reason: "queue full" });

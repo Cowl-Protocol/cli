@@ -14,8 +14,12 @@ import type { SpendStruct } from "../shielded/prove.js";
 export type RelayQuote = {
   /** The relayer's payout address — goes into the plan as the `relayer` field. */
   relayer: `0x${string}`;
-  /** Fee per spend, wei, in the native coin. The proof binds it. */
+  /** The relayer's gas cost per spend, wei, in the native coin. */
   feeWei: bigint;
+  /** The token the quote was priced in: "0" for native, else the address. */
+  token: string;
+  /** Fee per spend in that token's base units — what the proof binds. */
+  fee: bigint;
   chainId: number;
   pool: `0x${string}`;
 };
@@ -77,22 +81,39 @@ export function decodeSpend(w: WireSpend): SpendStruct {
 
 const clean = (url: string) => url.replace(/\/+$/, "");
 
-/** Ask a relayer what it charges and where its fee should be paid. */
-export async function fetchQuote(url: string): Promise<RelayQuote> {
+/**
+ * Ask a relayer what it charges and where its fee should be paid. Pass a token
+ * address to have the fee priced in that ERC-20 — the fee leg of a spend pays
+ * in the spend's own token.
+ */
+export async function fetchQuote(url: string, token?: `0x${string}`): Promise<RelayQuote> {
   let res: Response;
   try {
-    res = await fetch(`${clean(url)}/quote`);
+    res = await fetch(`${clean(url)}/quote${token ? `?token=${token}` : ""}`);
   } catch {
     throw new Error(`No relayer answering at ${url}.`);
   }
-  if (!res.ok) throw new Error(`Relayer at ${url} refused the quote (${res.status}).`);
-  const q = (await res.json()) as { relayer?: unknown; feeWei?: unknown; chainId?: unknown; pool?: unknown };
+  const q = (await res.json().catch(() => ({}))) as {
+    relayer?: unknown;
+    feeWei?: unknown;
+    token?: unknown;
+    fee?: unknown;
+    chainId?: unknown;
+    pool?: unknown;
+    error?: unknown;
+  };
+  if (!res.ok) {
+    throw new Error(typeof q.error === "string" ? q.error : `Relayer at ${url} refused the quote (${res.status}).`);
+  }
   if (typeof q.relayer !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(q.relayer)) {
     throw new Error("Relayer sent a malformed quote.");
   }
+  const feeWei = big(q.feeWei, "feeWei");
   return {
     relayer: q.relayer as `0x${string}`,
-    feeWei: big(q.feeWei, "feeWei"),
+    feeWei,
+    token: typeof q.token === "string" ? q.token : "0",
+    fee: q.fee === undefined ? feeWei : big(q.fee, "fee"),
     chainId: Number(q.chainId),
     pool: hex(q.pool, "pool"),
   };
