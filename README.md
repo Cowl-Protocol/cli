@@ -248,17 +248,18 @@ timeline on chain.
 
 ### Relayers
 
-A relayer submits your proven spend from its own wallet and earns a fee that is bound into the
-proof — it can redirect nothing, and your wallet never surfaces as the gas payer. A relayed
-private send is the most private operation the pool has: the chain records the relayer, two opaque
-commitments, two nullifiers, and nothing else. A relayed withdrawal can land on a fresh address
-that holds no gas at all.
+A relayer submits your proven spend from its own wallet and earns a fee bound into the proof, so it
+can redirect nothing and your wallet never surfaces as the gas payer. On Robinhood Chain testnet,
+withdrawals, private sends, and trades route through the Cowl relayer by default, so a fresh install
+is private at the boundary out of the box. The plan and its confirmation always show the relayer and
+its fee before you sign. Add `--self` to submit it yourself, or `--relay <url>` to use a different one.
 
 ```bash
-cowl relay serve                            # turn this wallet into a relayer, earn each spend's fee
-cowl relay quote http://localhost:4663      # ask a relayer its price per spend
-cowl unshield 0.1 --relay http://…:4663     # the relayer submits and pays gas, not you
-cowl send 0.01 ETH zcowl:0x… --relay http://…:4663
+cowl unshield 0.1                                  # routed through the default relayer
+cowl unshield 0.1 --self                           # submit it yourself instead
+cowl unshield 0.1 --relay https://your-relayer     # route through a specific relayer
+cowl relay serve                                   # turn this wallet into a relayer, earn each spend's fee
+cowl relay quote https://relay.cowlprotocol.com    # ask a relayer its price per spend
 ```
 
 ### Consolidation

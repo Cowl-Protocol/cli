@@ -29,6 +29,13 @@ export type NetworkDef = {
   rpcUrl: string;
   /** Tried when the primary RPC stops answering — public endpoints do. */
   rpcFallback?: string;
+  /**
+   * Public relayer used by default for boundary spends, so a wallet never
+   * surfaces as the gas payer. `--relay <url>` points at a different one and
+   * `--self` opts out; the plan and its confirm always show the relayer and its
+   * fee before anything signs. Set only where a relayer is actually hosted.
+   */
+  defaultRelay?: string;
   explorer: string;
   currency: { name: string; symbol: string; decimals: number };
   testnet: boolean;
@@ -37,16 +44,19 @@ export type NetworkDef = {
 
 // Robinhood Chain is an Arbitrum-based L2. Its public testnet (chainId 46630) went
 // live Feb 2026 and mainnet (chainId 4663) on Jul 1 2026, so Cowl targets the real
-// Robinhood Chain testnet by default. The official RPC
-// (https://rpc.testnet.chain.robinhood.com/rpc) is not reachable from every region,
-// so the default uses a globally-reachable public endpoint; swap it any time with
-// `cowl config set rpcUrl <url>`. Arbitrum Sepolia stays available as a fallback.
+// Robinhood Chain testnet by default. The globally-reachable thirdweb endpoint is the
+// primary; the official testnet RPC (no rate limits, but slower from some regions) is
+// the fallback for when thirdweb throttles under load. Swap either with
+// `cowl config set rpcUrl <url>`. A relayer polls hard, so it should pin the official
+// RPC directly instead of relying on the fallback (see deploy/relayer).
 export const NETWORKS: Record<string, NetworkDef> = {
   "robinhood-testnet": {
     key: "robinhood-testnet",
     label: "Robinhood Chain Testnet",
     chainId: 46630,
     rpcUrl: "https://46630.rpc.thirdweb.com",
+    rpcFallback: "https://rpc.testnet.chain.robinhood.com",
+    defaultRelay: "https://relay.cowlprotocol.com",
     explorer: "https://explorer.testnet.chain.robinhood.com",
     currency: { name: "Ether", symbol: "ETH", decimals: 18 },
     testnet: true,

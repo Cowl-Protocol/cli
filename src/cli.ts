@@ -134,6 +134,18 @@ function txLink(net: NetworkDef, hash: string): string {
   return net.explorer ? `${net.explorer}/tx/${hash}` : hash;
 }
 
+/**
+ * Which relayer a boundary spend should use. On a network with a hosted relayer,
+ * spends route through it by default so the wallet never surfaces as the gas
+ * payer; `--relay <url>` points at a different one, and `--self` opts out. The
+ * plan and its confirm always show the chosen relayer and fee before anything
+ * signs, so the default is never silent.
+ */
+function resolveRelay(net: NetworkDef, opts: { relay?: string; self?: boolean }): string | undefined {
+  if (opts.self) return undefined;
+  return opts.relay ?? net.defaultRelay;
+}
+
 function out(json: boolean, obj: unknown, human: () => void) {
   if (json) console.log(JSON.stringify(obj, null, 2));
   else human();
@@ -960,8 +972,9 @@ program
   .argument("<amount>", "amount, e.g. 0.01")
   .argument("<token>", "native symbol (e.g. ETH) or an ERC-20 address")
   .argument("<to>", "recipient: 0x address (public) or zcowl: address (private)")
-  .option("--relay <url>", "hand a private send to a relayer — your wallet never touches the chain")
-  .action(async (amount: string, token: string, to: string, opts: { relay?: string }) => {
+  .option("--relay <url>", "route the private send through a specific relayer instead of the network default")
+  .option("--self", "submit the private send yourself, skipping the default relayer")
+  .action(async (amount: string, token: string, to: string, opts: { relay?: string; self?: boolean }) => {
     const { net } = ctx();
     if (!(Number(amount) > 0)) die("Amount must be positive.");
 
@@ -977,11 +990,15 @@ program
         // takes its fee from the same shielded notes, bound into the proof. The
         // fee payout is the one public artifact — it names the token, never the
         // amount or the parties.
+        const relayUrl = resolveRelay(net, opts);
+        const relayDefaulted = Boolean(relayUrl && !opts.relay && !opts.self);
         let quote: RelayQuote | null = null;
-        if (opts.relay) {
+        if (relayUrl) {
           const tokenAddr =
             tokenField === 0n ? undefined : (`0x${tokenField.toString(16).padStart(40, "0")}` as `0x${string}`);
-          quote = await fetchQuote(opts.relay, tokenAddr);
+          quote = await fetchQuote(relayUrl, tokenAddr).catch((e) =>
+            die(`Couldn't reach the relayer at ${relayUrl}.`, `${(e as Error).message.split("\n")[0]} — retry, or add --self to submit it yourself.`),
+          );
           if (quote.chainId !== net.chainId) {
             die(`That relayer serves chain ${quote.chainId}, not ${net.chainId}.`);
           }
@@ -995,13 +1012,13 @@ program
             row("To", bone(to.slice(0, 22) + "…"));
             row("Amount", `${bold(amount)} ${muted(label)}`);
             if (quote) {
-              row("Relayer", muted(quote.relayer));
+              row("Relayer", muted(quote.relayer + (relayDefaulted ? " · default" : "")));
               row("Fee", muted(`${formatUnits(fee, decimals)} ${label}, paid from shielded funds`));
             }
           },
           (pool, wallet, keys) =>
             planSend(pool, wallet, keys, recipient, value, tokenField, BigInt(net.chainId), fee, relayerField),
-          opts.relay,
+          relayUrl,
         );
         return;
       }
@@ -1504,9 +1521,10 @@ program
   .argument("<amount>", "amount, e.g. 0.1")
   .argument("[token]", "native symbol (default) or an ERC-20 address")
   .option("--exact", "move the exact amount in one withdrawal instead of shared denominations")
-  .option("--relay <url>", "hand the spend to a relayer — its wallet submits and pays gas, not yours")
+  .option("--relay <url>", "route the spend through a specific relayer instead of the network default")
+  .option("--self", "submit the withdrawal yourself, skipping the default relayer")
   .option("--spread <window>", "scatter the withdrawals across a time window (45s, 20m, 3h)")
-  .action(async (amount: string, token: string | undefined, opts: { exact?: boolean; relay?: string; spread?: string }) => {
+  .action(async (amount: string, token: string | undefined, opts: { exact?: boolean; relay?: string; self?: boolean; spread?: string }) => {
     const { net } = ctx();
     const sym = net.currency.symbol;
     if (!(Number(amount) > 0)) die("Amount must be positive.");
@@ -1521,11 +1539,15 @@ program
       // notes, one fee per spend, all bound into each proof before it leaves.
       // The fee is in the spend's own token — the relayer prices non-native
       // ones through the venue quoter.
+      const relayUrl = resolveRelay(net, opts);
+      const relayDefaulted = Boolean(relayUrl && !opts.relay && !opts.self);
       let quote: RelayQuote | null = null;
-      if (opts.relay) {
+      if (relayUrl) {
         const tokenAddr =
           tokenField === 0n ? undefined : (`0x${tokenField.toString(16).padStart(40, "0")}` as `0x${string}`);
-        quote = await fetchQuote(opts.relay, tokenAddr);
+        quote = await fetchQuote(relayUrl, tokenAddr).catch((e) =>
+          die(`Couldn't reach the relayer at ${relayUrl}.`, `${(e as Error).message.split("\n")[0]} — retry, or add --self to submit it yourself.`),
+        );
         if (quote.chainId !== net.chainId) {
           die(`That relayer serves chain ${quote.chainId}, not ${net.chainId}.`);
         }
@@ -1549,7 +1571,7 @@ program
           }
           row("To", muted(address));
           if (quote) {
-            row("Relayer", muted(quote.relayer));
+            row("Relayer", muted(quote.relayer + (relayDefaulted ? " · default" : "")));
             row(
               "Fee",
               muted(
@@ -1564,7 +1586,7 @@ program
           (part) => (pool: Pool, wallet: Wallet, keys: ShieldedKeys, payout: bigint) =>
             planUnshield(pool, wallet, keys, part, tokenField, payout, BigInt(net.chainId), feePerSpend, relayerField),
         ),
-        opts.relay,
+        relayUrl,
         opts.spread,
       );
       return;
@@ -2021,10 +2043,11 @@ program
   .argument("<a>", "amount to receive — or buy|sell for the local simulation")
   .argument("[b]", "token to receive: the native symbol, USDG, or an ERC-20 address")
   .argument("[c]", "(simulation only) market like TSLA-USDG")
-  .option("--relay <url>", "hand the trade to a relayer — its wallet submits and pays gas, not yours")
+  .option("--relay <url>", "route the trade through a specific relayer instead of the network default")
+  .option("--self", "submit the trade yourself, skipping the default relayer")
   .option("--exact", "trade a precise amount instead of the shared denominations")
   .option("--max <amount>", "cap on what you will spend (defaults to the quoted price)")
-  .action(async (a: string, b: string | undefined, c: string | undefined, opts: { relay?: string; exact?: boolean; max?: string }) => {
+  .action(async (a: string, b: string | undefined, c: string | undefined, opts: { relay?: string; self?: boolean; exact?: boolean; max?: string }) => {
     const { net } = ctx();
     const sym = net.currency.symbol;
     const isSim = a.toLowerCase() === "buy" || a.toLowerCase() === "sell";
@@ -2089,7 +2112,7 @@ async function tradeOnChain(
   net: NetworkDef,
   amount: string,
   outSpec: string,
-  opts: { relay?: string; exact?: boolean; max?: string },
+  opts: { relay?: string; self?: boolean; exact?: boolean; max?: string },
 ): Promise<void> {
   requireWallet();
   const venue = net.contracts;
@@ -2165,9 +2188,13 @@ async function tradeOnChain(
   }
 
   // A relayed trade severs the last link — the gas payer. Fee in the input token.
+  const relayUrl = resolveRelay(net, opts);
+  const relayDefaulted = Boolean(relayUrl && !opts.relay && !opts.self);
   let quote: RelayQuote | null = null;
-  if (opts.relay) {
-    quote = await fetchQuote(opts.relay, tokenInField === 0n ? undefined : venue.usdg, "trade");
+  if (relayUrl) {
+    quote = await fetchQuote(relayUrl, tokenInField === 0n ? undefined : venue.usdg, "trade").catch((e) =>
+      die(`Couldn't reach the relayer at ${relayUrl}.`, `${(e as Error).message.split("\n")[0]} — retry, or add --self to submit it yourself.`),
+    );
     if (quote.chainId !== net.chainId) die(`That relayer serves chain ${quote.chainId}, not ${net.chainId}.`);
   }
   const relayerField = quote ? BigInt(quote.relayer) : 0n;
@@ -2177,7 +2204,7 @@ async function tradeOnChain(
   row("Receive", `${bold(amount)} ${muted(outLabel)} ${muted("· exact")}`);
   row("Pay", `${bold(formatUnits(quotedIn, inMeta.decimals))} ${muted(inMeta.symbol)}${maxIn !== quotedIn ? muted(` · max ${formatUnits(maxIn, inMeta.decimals)}`) : ""}`);
   if (quote) {
-    row("Relayer", muted(quote.relayer));
+    row("Relayer", muted(quote.relayer + (relayDefaulted ? " · default" : "")));
     row("Fee", muted(`${formatUnits(fee, inMeta.decimals)} ${inMeta.symbol}, paid from shielded funds`));
   }
   row("Adapter", muted(adapterAddress(net)!));
@@ -2249,9 +2276,9 @@ async function tradeOnChain(
     // The output note's secrets go to disk before anything broadcasts.
     stashPendingNote(net.key, outNote);
 
-    s.message(opts.relay ? "Relaying" : "Broadcasting");
-    const receipt = opts.relay
-      ? await relayTrade(opts.relay, submission)
+    s.message(relayUrl ? "Relaying" : "Broadcasting");
+    const receipt = relayUrl
+      ? await relayTrade(relayUrl, submission)
       : await submitTrade(net, account, submission);
 
     try {
