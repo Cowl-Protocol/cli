@@ -64,6 +64,7 @@ export const NETWORKS: Record<string, NetworkDef> = {
       usdg: "0xa82762eDA1AF5Ed19B9BD544C121dbcF365526aC",
       swapRouter: "0xbd610c3A708C483a64dC2C92876C2D1a8Ef43b03",
       quoter: "0x5cD1F037A2CB277A7661Ad6c045803BFC428f84B",
+      tradeAdapter: "0xD0D74be38C0B99EBa6465e9F512c3F78EE2d1f3B",
     },
   },
   "robinhood-mainnet": {
