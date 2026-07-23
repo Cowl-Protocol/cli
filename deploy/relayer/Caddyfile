@@ -1,0 +1,8 @@
+# Caddy provisions and renews a Let's Encrypt certificate for the host below on
+# its own, as long as the DNS A record points at this VPS and ports 80 and 443
+# are reachable. It terminates TLS and reverse-proxies to the relayer daemon,
+# which listens on localhost only (never expose 4663 to the public internet).
+
+relay.cowlprotocol.com {
+	reverse_proxy 127.0.0.1:4663
+}

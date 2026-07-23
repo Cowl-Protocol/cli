@@ -1,0 +1,35 @@
+[Unit]
+Description=Cowl gasless relayer (Robinhood Chain testnet)
+Documentation=https://www.cowlprotocol.com/docs/gasless-relayer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cowl-relayer
+Group=cowl-relayer
+
+# Data directory holding this relayer's DEDICATED keystore (keystore.json).
+# Never the deployer keystore. See README.md, step 3.
+Environment=COWL_HOME=/opt/cowl-relayer/data
+
+# COWL_PASSPHRASE lives here, root-owned and chmod 600. It unlocks the keystore
+# non-interactively so the daemon can sign submissions on boot.
+EnvironmentFile=/etc/cowl-relayer/relayer.env
+
+# Bind to the testnet pool. --margin is the relayer's take over raw gas (percent).
+# If `which cowl` is not /usr/local/bin/cowl, point ExecStart at the real path.
+ExecStart=/usr/local/bin/cowl -n robinhood-testnet relay serve --port 4663 --margin 25
+
+Restart=on-failure
+RestartSec=5s
+
+# Hardening: the daemon needs nothing but its data directory and the network.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/cowl-relayer/data
+
+[Install]
+WantedBy=multi-user.target
