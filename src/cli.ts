@@ -61,7 +61,8 @@ import { logo } from "./logo.js";
 import { deriveShieldedKeys, decodePaymentAddress, isPaymentAddress, type ShieldedKeys } from "./shielded/keys.js";
 import { tokenToField, tokenLabel } from "./shielded/note.js";
 import { shield as poolShield, unshield as poolUnshield, sendPrivate, balance as poolBalance, scan as poolScan, trade as poolTrade } from "./shielded/pool.js";
-import { planSend, planUnshield, loadPool, loadWallet, type Pool, type Wallet, type PlannedSpend } from "./shielded/pool.js";
+import { planSend, planUnshield, planConsolidate, loadPool, loadWallet, type Pool, type Wallet, type PlannedSpend } from "./shielded/pool.js";
+import { hexToField as shieldedHexToField } from "./shielded/field.js";
 import { decompose, groupParts, tiersFor, MAX_BOUNDARY_TXS } from "./shielded/denominations.js";
 import { fetchQuote, relaySpend, type RelayQuote } from "./relayer/client.js";
 import { MARKETS, PROTOCOL_FEE_BPS, QUOTE_SYMBOL, WAD, priceInQuoteWad, quoteTrade, type Side } from "./shielded/market.js";
@@ -980,9 +981,9 @@ program
       const sym = net.currency.symbol;
       const tokenField = tokenToField(token, sym);
       const recipient = decodePaymentAddress(to);
-      const value = parseEther(amount);
       // Where the pool is live the send is a real join-split; elsewhere it is the sim.
       if (net.contracts.pool) {
+        const { value, label } = await resolveBoundaryAmount(net, amount, tokenField, sym);
         // Relayed, the sender's wallet appears nowhere: the relayer submits and
         // takes its fee from the same shielded notes, bound into the proof. The
         // fee payout is the one public artifact — it names the token, never the
@@ -1002,7 +1003,7 @@ program
           "Private send",
           () => {
             row("To", bone(to.slice(0, 22) + "…"));
-            row("Amount", `${bold(amount)} ${muted(tokenLabel(tokenField, sym))}`);
+            row("Amount", `${bold(amount)} ${muted(label)}`);
             if (quote) {
               row("Relayer", muted(quote.relayer));
               row("Fee", muted(`${formatEther(fee)} ${sym}, paid from shielded funds`));
@@ -1014,6 +1015,8 @@ program
         );
         return;
       }
+      // The local simulation prices everything at 18 decimals, consistently.
+      const value = parseEther(amount);
       const keys = await shieldedKeys();
       try {
         const res = sendPrivate(net.key, keys, recipient, value, tokenField);
@@ -1111,6 +1114,39 @@ program
   });
 
 /**
+ * Resolve an on-chain shielded amount against the token's real decimals.
+ *
+ * The native coin is 18; an ERC-20's come from its contract — assuming 18
+ * would size a 6-decimal token's spend a trillion times wrong. Sim-only market
+ * symbols have no contract to read and are refused here.
+ */
+async function resolveBoundaryAmount(
+  net: NetworkDef,
+  amount: string,
+  tokenField: bigint,
+  sym: string,
+): Promise<{ value: bigint; decimals: number; label: string }> {
+  if (tokenField === 0n) {
+    return { value: parseEther(amount), decimals: 18, label: tokenLabel(tokenField, sym) };
+  }
+  const { TOKENS_BY_FIELD } = await import("./shielded/tokens.js");
+  const listed = TOKENS_BY_FIELD.get(tokenField);
+  if (listed) {
+    die(
+      `${listed.symbol} is a simulated market token with no contract behind it.`,
+      `On-chain shielded operations take ${sym} or a real ERC-20 address.`,
+    );
+  }
+  const addr = `0x${tokenField.toString(16).padStart(40, "0")}` as Address;
+  try {
+    const meta = await tokenMeta(net, addr);
+    return { value: parseUnits(amount, meta.decimals), decimals: meta.decimals, label: meta.symbol };
+  } catch {
+    die(`Can't read that token on ${net.label}.`, `Is ${addr} an ERC-20 on this network?`);
+  }
+}
+
+/**
  * Split a boundary amount into denomination parts, or die with guidance.
  *
  * Deposits and withdrawals surface their amounts in public calldata, so the
@@ -1185,33 +1221,8 @@ async function shieldOnChain(
   const { encryptNote, packCipher } = await import("./shielded/crypto.js");
 
   // Resolve what is actually being deposited before asking for a passphrase or
-  // proving anything. Listed market symbols are sim-only sentinels with no contract
-  // behind them, and a real ERC-20's decimals come from the chain — assuming 18
-  // would shield the wrong amount on a 6-decimal token.
-  let value: bigint;
-  let decimals = 18;
-  let label = tokenLabel(tokenField, sym);
-  if (tokenField === 0n) {
-    value = parseEther(amount);
-  } else {
-    const { TOKENS_BY_FIELD } = await import("./shielded/tokens.js");
-    const listed = TOKENS_BY_FIELD.get(tokenField);
-    if (listed) {
-      die(
-        `${listed.symbol} is a simulated market token with no contract behind it.`,
-        `On-chain shielding takes ${sym} or a real ERC-20 address.`,
-      );
-    }
-    const addr = `0x${tokenField.toString(16).padStart(40, "0")}` as Address;
-    try {
-      const meta = await tokenMeta(net, addr);
-      value = parseUnits(amount, meta.decimals);
-      decimals = meta.decimals;
-      label = meta.symbol;
-    } catch {
-      die(`Can't read that token on ${net.label}.`, `Is ${addr} an ERC-20 on this network?`);
-    }
-  }
+  // proving anything.
+  const { value, decimals, label } = await resolveBoundaryAmount(net, amount, tokenField, sym);
 
   const { parts, dust } = boundaryParts(value, decimals, label, exact);
 
@@ -1437,12 +1448,11 @@ program
     const sym = net.currency.symbol;
     if (!(Number(amount) > 0)) die("Amount must be positive.");
     const tokenField = tokenToField(token ?? sym, sym);
-    const value = parseEther(amount);
     // Where the pool is live the withdrawal is a real join-split with a public leg.
     if (net.contracts.pool) {
       const address = requireWallet();
-      const label = tokenLabel(tokenField, sym);
-      const { parts, dust } = boundaryParts(value, 18, label, Boolean(opts.exact));
+      const { value, decimals, label } = await resolveBoundaryAmount(net, amount, tokenField, sym);
+      const { parts, dust } = boundaryParts(value, decimals, label, Boolean(opts.exact));
 
       // A relayed withdrawal pays the relayer's fee out of the same shielded
       // notes, one fee per spend, all bound into each proof before it leaves.
@@ -1463,10 +1473,10 @@ program
         () => {
           row("Amount", `${bold(amount)} ${muted(label)}`);
           if (parts.length > 1 || dust > 0n) {
-            row("Plan", `${partsLabel(parts, 18)} ${muted(`${label} · ${parts.length} withdrawals`)}`);
+            row("Plan", `${partsLabel(parts, decimals)} ${muted(`${label} · ${parts.length} withdrawals`)}`);
           }
           if (dust > 0n) {
-            row("Remainder", muted(`${formatUnits(dust, 18)} ${label} stays shielded — add --exact to include it`));
+            row("Remainder", muted(`${formatUnits(dust, decimals)} ${label} stays shielded — add --exact to include it`));
           }
           row("To", muted(address));
           if (quote) {
@@ -1489,6 +1499,8 @@ program
       );
       return;
     }
+    // The local simulation prices everything at 18 decimals, consistently.
+    const value = parseEther(amount);
     const keys = await shieldedKeys();
     try {
       const res = poolUnshield(net.key, keys, value, tokenField);
@@ -1500,6 +1512,49 @@ program
     } catch (e) {
       die((e as Error).message);
     }
+  });
+
+program
+  .command("consolidate")
+  .description("merge fragmented shielded notes so any amount spends in one join-split")
+  .argument("[token]", "native symbol (default) or an ERC-20 address")
+  .action(async (token: string | undefined) => {
+    const { net } = ctx();
+    const sym = net.currency.symbol;
+    const tokenField = tokenToField(token ?? sym, sym);
+    if (!net.contracts.pool) {
+      warn(`Consolidation applies to the on-chain pool, and ${net.label} has none yet.`);
+      return;
+    }
+    requireWallet();
+
+    // A join-split takes at most two inputs, so a balance spread across many
+    // small notes caps what one spend can move. Each round merges the two
+    // smallest into one; n notes settle in n − 2 spends.
+    const wallet = loadWallet(net.key);
+    const label = tokenLabel(tokenField, sym);
+    const live = wallet.notes.filter(
+      (n) => !n.spent && shieldedHexToField(n.token) === tokenField && shieldedHexToField(n.value) > 0n,
+    );
+    if (live.length <= 2) {
+      ok(`Nothing to consolidate — ${live.length} ${label} note${live.length === 1 ? "" : "s"} already spend together.`);
+      return;
+    }
+    const rounds = live.length - 2;
+    await spendOnChain(
+      net,
+      "Consolidate",
+      () => {
+        row("Token", muted(label));
+        row("Notes", `${bold(String(live.length))} ${muted("→ 2")}`);
+        row("Spends", muted(String(rounds)));
+      },
+      Array.from(
+        { length: rounds },
+        () => (pool: Pool, w: Wallet, keys: ShieldedKeys) =>
+          planConsolidate(pool, w, keys, tokenField, BigInt(net.chainId)),
+      ),
+    );
   });
 
 // ---- relay ------------------------------------------------------------------

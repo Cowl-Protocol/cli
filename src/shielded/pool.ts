@@ -146,6 +146,10 @@ export function computeBalance(wallet: Wallet): Balance {
   const by = new Map<string, { amount: bigint; notes: number }>();
   for (const n of wallet.notes) {
     if (n.spent) continue;
+    // Zero-value fillers are real leaves — every spend appends two outputs so
+    // leg counts stay hidden — but they hold nothing, so counting them would
+    // only make the balance read busier than it is.
+    if (hexToField(n.value) === 0n) continue;
     const cur = by.get(n.token) ?? { amount: 0n, notes: 0 };
     cur.amount += hexToField(n.value);
     cur.notes++;
@@ -331,6 +335,53 @@ export function planSend(
       { note: out1, viewPubHex: keys.viewPubHex },
     ],
     inputLeaves: inputs.map((n) => n.leafIndex),
+  };
+}
+
+/**
+ * Plan one consolidation step: the two smallest live notes of `token` merge
+ * into a single note back to yourself. A join-split takes at most two inputs,
+ * so a wallet fragmented across many small notes repeats this until any amount
+ * it wants to spend fits in two. Pure internal op — nothing surfaces on chain
+ * beyond the usual two commitments and two nullifiers.
+ */
+export function planConsolidate(
+  pool: Pool,
+  wallet: Wallet,
+  keys: ShieldedKeys,
+  token: bigint,
+  chainId: bigint,
+): PlannedSpend {
+  const avail = wallet.notes
+    .filter((n) => !n.spent && hexToField(n.token) === token && hexToField(n.value) > 0n)
+    .sort((a, b) => (hexToField(a.value) < hexToField(b.value) ? -1 : 1));
+  if (avail.length < 3) {
+    throw new Error("Nothing to consolidate — two notes or fewer already spend together.");
+  }
+  const [a, b] = [avail[0]!, avail[1]!];
+  const total = hexToField(a.value) + hexToField(b.value);
+  const out0: Note = { value: total, token, mpk: keys.mpk, blinding: randomField() };
+  const out1: Note = { value: 0n, token, mpk: keys.mpk, blinding: randomField() };
+  return {
+    plan: {
+      sk: keys.sk,
+      nk: keys.nk,
+      token,
+      inputs: planInputs([a, b]),
+      outputs: [outParts(out0), outParts(out1)],
+      leaves: pool.commitments.map(hexToField),
+      publicToken: token,
+      publicValue: 0n,
+      fee: 0n,
+      recipient: 0n,
+      relayer: 0n,
+      chainId,
+    },
+    outputs: [
+      { note: out0, viewPubHex: keys.viewPubHex },
+      { note: out1, viewPubHex: keys.viewPubHex },
+    ],
+    inputLeaves: [a.leafIndex, b.leafIndex],
   };
 }
 
