@@ -62,7 +62,10 @@ deployer keystore onto the VPS.
 
 ```bash
 sudo -u cowl-relayer COWL_HOME=/opt/cowl-relayer/data cowl network use robinhood-testnet
-sudo -u cowl-relayer COWL_HOME=/opt/cowl-relayer/data cowl wallet new --key
+# Point at the official RPC. The public thirdweb default rate-limits (429) under a
+# relayer's request volume, which stalls /quote; the official endpoint does not.
+sudo -u cowl-relayer COWL_HOME=/opt/cowl-relayer/data cowl config set rpcUrl https://rpc.testnet.chain.robinhood.com
+sudo -u cowl-relayer COWL_HOME=/opt/cowl-relayer/data cowl wallet new --mnemonic
 # pick a strong passphrase when asked — it goes in the env file in step 4
 sudo -u cowl-relayer COWL_HOME=/opt/cowl-relayer/data cowl wallet address
 ```
