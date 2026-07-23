@@ -10,6 +10,7 @@
 //
 // JSON carries bigints as decimal strings and bytes as 0x-hex.
 import type { SpendStruct } from "../shielded/prove.js";
+import type { TradeSubmission } from "../shielded/contract.js";
 
 export type RelayQuote = {
   /** The relayer's payout address — goes into the plan as the `relayer` field. */
@@ -81,15 +82,67 @@ export function decodeSpend(w: WireSpend): SpendStruct {
 
 const clean = (url: string) => url.replace(/\/+$/, "");
 
+export type WireTrade = {
+  spend: WireSpend;
+  ciphertexts: [string, string];
+  spendProof: string;
+  tokenOut: string;
+  amountOut: string;
+  poolFee: number;
+  shieldCommitment: string;
+  shieldNewRoot: string;
+  shieldCiphertext: string;
+  shieldProof: string;
+};
+
+export function encodeTrade(t: TradeSubmission): WireTrade {
+  return {
+    spend: encodeSpend(t.spend),
+    ciphertexts: [t.spendCiphertexts[0], t.spendCiphertexts[1]],
+    spendProof: t.spendProof,
+    tokenOut: t.tokenOut.toString(),
+    amountOut: t.amountOut.toString(),
+    poolFee: t.poolFee,
+    shieldCommitment: t.shieldCommitment,
+    shieldNewRoot: t.shieldNewRoot,
+    shieldCiphertext: t.shieldCiphertext,
+    shieldProof: t.shieldProof,
+  };
+}
+
+export function decodeTrade(w: WireTrade): TradeSubmission {
+  return {
+    spend: decodeSpend(w.spend),
+    spendCiphertexts: [hex(w.ciphertexts?.[0], "ciphertext"), hex(w.ciphertexts?.[1], "ciphertext")],
+    spendProof: hex(w.spendProof, "spendProof"),
+    tokenOut: big(w.tokenOut, "tokenOut"),
+    amountOut: big(w.amountOut, "amountOut"),
+    poolFee: Number(w.poolFee) || 3000,
+    shieldCommitment: hex(w.shieldCommitment, "shieldCommitment"),
+    shieldNewRoot: hex(w.shieldNewRoot, "shieldNewRoot"),
+    shieldCiphertext: hex(w.shieldCiphertext, "shieldCiphertext"),
+    shieldProof: hex(w.shieldProof, "shieldProof"),
+  };
+}
+
 /**
  * Ask a relayer what it charges and where its fee should be paid. Pass a token
  * address to have the fee priced in that ERC-20 — the fee leg of a spend pays
- * in the spend's own token.
+ * in the spend's own token. A trade burns roughly three spends' worth of gas,
+ * so ask with op "trade" to have the quote sized for one.
  */
-export async function fetchQuote(url: string, token?: `0x${string}`): Promise<RelayQuote> {
+export async function fetchQuote(
+  url: string,
+  token?: `0x${string}`,
+  op: "spend" | "trade" = "spend",
+): Promise<RelayQuote> {
+  const params = new URLSearchParams();
+  if (token) params.set("token", token);
+  if (op !== "spend") params.set("op", op);
+  const qs = params.size ? `?${params.toString()}` : "";
   let res: Response;
   try {
-    res = await fetch(`${clean(url)}/quote${token ? `?token=${token}` : ""}`);
+    res = await fetch(`${clean(url)}/quote${qs}`);
   } catch {
     throw new Error(`No relayer answering at ${url}.`);
   }
@@ -119,19 +172,13 @@ export async function fetchQuote(url: string, token?: `0x${string}`): Promise<Re
   };
 }
 
-/** Hand a proven spend to the relayer and wait for its receipt. */
-export async function relaySpend(
-  url: string,
-  spend: SpendStruct,
-  ciphertexts: [`0x${string}`, `0x${string}`],
-  proof: `0x${string}`,
-): Promise<RelayReceipt> {
+async function post(url: string, path: string, payload: unknown, what: string): Promise<RelayReceipt> {
   let res: Response;
   try {
-    res = await fetch(`${clean(url)}/relay`, {
+    res = await fetch(`${clean(url)}${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ spend: encodeSpend(spend), ciphertexts, proof }),
+      body: JSON.stringify(payload),
     });
   } catch {
     throw new Error(`No relayer answering at ${url}.`);
@@ -143,11 +190,26 @@ export async function relaySpend(
     blockNumber?: unknown;
   };
   if (!res.ok) {
-    throw new Error(typeof body.error === "string" ? body.error : `Relayer rejected the spend (${res.status}).`);
+    throw new Error(typeof body.error === "string" ? body.error : `Relayer rejected the ${what} (${res.status}).`);
   }
   return {
     hash: hex(body.hash, "hash"),
     gasUsed: big(body.gasUsed, "gasUsed"),
     blockNumber: big(body.blockNumber, "blockNumber"),
   };
+}
+
+/** Hand a proven spend to the relayer and wait for its receipt. */
+export async function relaySpend(
+  url: string,
+  spend: SpendStruct,
+  ciphertexts: [`0x${string}`, `0x${string}`],
+  proof: `0x${string}`,
+): Promise<RelayReceipt> {
+  return post(url, "/relay", { spend: encodeSpend(spend), ciphertexts, proof }, "spend");
+}
+
+/** Hand a proven atomic trade to the relayer and wait for its receipt. */
+export async function relayTrade(url: string, t: TradeSubmission): Promise<RelayReceipt> {
+  return post(url, "/trade", encodeTrade(t), "trade");
 }

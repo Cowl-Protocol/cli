@@ -474,3 +474,177 @@ const ERC20_APPROVE_ABI = [
   { type: "function", name: "approve", stateMutability: "nonpayable", inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ type: "bool" }] },
   { type: "function", name: "allowance", stateMutability: "view", inputs: [{ name: "owner", type: "address" }, { name: "spender", type: "address" }], outputs: [{ type: "uint256" }] },
 ] as const;
+
+// ---- trade adapter ----------------------------------------------------------
+
+const SPEND_COMPONENTS = [
+  { name: "membershipRoot", type: "bytes32" },
+  { name: "nullifiers", type: "bytes32[2]" },
+  { name: "commitments", type: "bytes32[2]" },
+  { name: "newRoot", type: "bytes32" },
+  { name: "token", type: "uint256" },
+  { name: "value", type: "uint256" },
+  { name: "fee", type: "uint256" },
+  { name: "recipient", type: "address" },
+  { name: "relayer", type: "address" },
+] as const;
+
+export const TRADE_ADAPTER_ABI = [
+  {
+    type: "function",
+    name: "trade",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "p",
+        type: "tuple",
+        components: [
+          { name: "spend", type: "tuple", components: SPEND_COMPONENTS },
+          { name: "spendCiphertexts", type: "bytes[2]" },
+          { name: "spendProof", type: "bytes" },
+          { name: "tokenOut", type: "uint256" },
+          { name: "amountOut", type: "uint256" },
+          { name: "poolFee", type: "uint24" },
+          { name: "shieldCommitment", type: "bytes32" },
+          { name: "shieldNewRoot", type: "bytes32" },
+          { name: "shieldCiphertext", type: "bytes" },
+          { name: "shieldProof", type: "bytes" },
+        ],
+      },
+    ],
+    outputs: [],
+  },
+] as const;
+
+const QUOTER_ABI = [
+  {
+    type: "function",
+    name: "quoteExactOutputSingle",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "tokenIn", type: "address" },
+          { name: "tokenOut", type: "address" },
+          { name: "amount", type: "uint256" },
+          { name: "fee", type: "uint24" },
+          { name: "sqrtPriceLimitX96", type: "uint160" },
+        ],
+      },
+    ],
+    outputs: [
+      { name: "amountIn", type: "uint256" },
+      { name: "sqrtPriceX96After", type: "uint160" },
+      { name: "initializedTicksCrossed", type: "uint32" },
+      { name: "gasEstimate", type: "uint256" },
+    ],
+  },
+] as const;
+
+/** Everything CowlTradeAdapter.trade takes, client-shaped. */
+export type TradeSubmission = {
+  spend: SpendStruct;
+  spendCiphertexts: [`0x${string}`, `0x${string}`];
+  spendProof: `0x${string}`;
+  tokenOut: bigint;
+  amountOut: bigint;
+  poolFee: number;
+  shieldCommitment: `0x${string}`;
+  shieldNewRoot: `0x${string}`;
+  shieldCiphertext: `0x${string}`;
+  shieldProof: `0x${string}`;
+};
+
+export function adapterAddress(net: NetworkDef): Address | null {
+  return net.contracts.tradeAdapter ?? null;
+}
+
+/** Ask the venue quoter what an exact output costs, as a free eth_call. */
+export async function quoteExactOutput(
+  net: NetworkDef,
+  tokenIn: Address,
+  tokenOut: Address,
+  amountOut: bigint,
+): Promise<bigint> {
+  const quoter = net.contracts.quoter;
+  if (!quoter) throw new Error(`No trade venue on ${net.label}.`);
+  const { result } = await publicClient(net).simulateContract({
+    address: quoter,
+    abi: QUOTER_ABI,
+    functionName: "quoteExactOutputSingle",
+    args: [{ tokenIn, tokenOut, amount: amountOut, fee: 3000, sqrtPriceLimitX96: 0n }],
+  });
+  return result[0];
+}
+
+function tradeArgs(t: TradeSubmission) {
+  return [
+    {
+      spend: {
+        membershipRoot: t.spend.membershipRoot,
+        nullifiers: [t.spend.nullifiers[0], t.spend.nullifiers[1]] as readonly [`0x${string}`, `0x${string}`],
+        commitments: [t.spend.commitments[0], t.spend.commitments[1]] as readonly [`0x${string}`, `0x${string}`],
+        newRoot: t.spend.newRoot,
+        token: t.spend.token,
+        value: t.spend.value,
+        fee: t.spend.fee,
+        recipient: fieldToAddress(t.spend.recipient),
+        relayer: fieldToAddress(t.spend.relayer),
+      },
+      spendCiphertexts: [t.spendCiphertexts[0], t.spendCiphertexts[1]] as readonly [`0x${string}`, `0x${string}`],
+      spendProof: t.spendProof,
+      tokenOut: t.tokenOut,
+      amountOut: t.amountOut,
+      poolFee: t.poolFee,
+      shieldCommitment: t.shieldCommitment,
+      shieldNewRoot: t.shieldNewRoot,
+      shieldCiphertext: t.shieldCiphertext,
+      shieldProof: t.shieldProof,
+    },
+  ] as const;
+}
+
+/** Dry-run a trade against current state — free, and how a relayer vets one. */
+export async function simulateTrade(net: NetworkDef, from: Address, t: TradeSubmission): Promise<void> {
+  const adapter = adapterAddress(net);
+  if (!adapter) throw new Error(`No trade adapter deployed on ${net.label}.`);
+  await publicClient(net).simulateContract({
+    account: from,
+    address: adapter,
+    abi: TRADE_ADAPTER_ABI,
+    functionName: "trade",
+    args: tradeArgs(t),
+  });
+}
+
+/** Submit an atomic private trade through the adapter. */
+export async function submitTrade(
+  net: NetworkDef,
+  account: PrivateKeyAccount,
+  t: TradeSubmission,
+): Promise<SpendReceipt> {
+  const adapter = adapterAddress(net);
+  if (!adapter) throw new Error(`No trade adapter deployed on ${net.label}.`);
+
+  const wallet = walletClient(net, account);
+  const hash = await wallet.writeContract({
+    account,
+    chain: toViemChain(net),
+    address: adapter,
+    abi: TRADE_ADAPTER_ABI,
+    functionName: "trade",
+    args: tradeArgs(t),
+  });
+
+  const receipt = await publicClient(net).waitForTransactionReceipt({ hash });
+  if (receipt.status !== "success") throw new Error(`Trade transaction reverted (${hash}).`);
+  const pool = poolAddress(net);
+  return {
+    hash,
+    gasUsed: receipt.gasUsed,
+    blockNumber: receipt.blockNumber,
+    outputs: pool ? readAllNoteCommitted(receipt, pool) : [],
+  };
+}

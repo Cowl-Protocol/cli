@@ -8,6 +8,8 @@ export type CowlContracts = {
   usdg?: `0x${string}`;
   swapRouter?: `0x${string}`;
   quoter?: `0x${string}`;
+  /** The atomic private-trade adapter (unshield → swap → re-shield). */
+  tradeAdapter?: `0x${string}`;
   /**
    * Block the pool was deployed in. Commitments live in the event log rather than
    * contract storage, so rebuilding the tree means replaying NoteCommitted — and

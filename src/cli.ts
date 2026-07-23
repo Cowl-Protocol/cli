@@ -64,7 +64,7 @@ import { shield as poolShield, unshield as poolUnshield, sendPrivate, balance as
 import { planSend, planUnshield, planConsolidate, loadPool, loadWallet, type Pool, type Wallet, type PlannedSpend } from "./shielded/pool.js";
 import { hexToField as shieldedHexToField } from "./shielded/field.js";
 import { decompose, groupParts, tiersFor, MAX_BOUNDARY_TXS } from "./shielded/denominations.js";
-import { fetchQuote, relaySpend, type RelayQuote } from "./relayer/client.js";
+import { fetchQuote, relaySpend, relayTrade, type RelayQuote } from "./relayer/client.js";
 import { MARKETS, PROTOCOL_FEE_BPS, QUOTE_SYMBOL, WAD, priceInQuoteWad, quoteTrade, type Side } from "./shielded/market.js";
 
 /** The wordmark needs ~35 columns; fall back to the compact banner when narrow. */
@@ -243,25 +243,6 @@ async function syncPoolQuietly(
     );
     return null;
   }
-}
-
-/**
- * Spend ops (unshield, private send, trade) on a network whose pool is a real
- * contract. Their circuits have not shipped, and simulating them here would
- * corrupt the chain-synced ledger: a sim nullifier pins a REAL note as spent, and
- * the sim's output note vanishes on the next sync because the chain never saw it —
- * which reads as lost funds. So on pool networks they are switched off, not
- * simulated. Same shape as `stake`: ran fine, has something to say, exits 0.
- */
-function spendsPending(net: NetworkDef, what: string): never {
-  warn(`${what} is not live on ${bone(net.label)} yet — the spend circuits haven't shipped.`);
-  console.log(
-    `  ${muted("Your shielded notes are settled on chain and become spendable the moment the circuits land.")}`,
-  );
-  console.log(
-    `  ${muted("Want the full simulated flow? Use a network without a pool contract:")} ${dim("cowl -n arbitrum-sepolia …")}`,
-  );
-  process.exit(0);
 }
 
 /** Feature whose contract is not deployed on this network yet. */
@@ -1999,21 +1980,43 @@ program
 
 program
   .command("trade")
-  .description("private trade: swap one shielded token for another")
-  .argument("<side>", "buy | sell")
-  .argument("<amount>", "amount you spend (base for sell, quote for buy)")
-  .argument("<market>", "market, e.g. TSLA-USDG")
-  .action(async (side: string, amount: string, market: string) => {
+  .description("private trade — receive an exact amount of another token, atomically")
+  .argument("<a>", "amount to receive — or buy|sell for the local simulation")
+  .argument("[b]", "token to receive: the native symbol, USDG, or an ERC-20 address")
+  .argument("[c]", "(simulation only) market like TSLA-USDG")
+  .option("--relay <url>", "hand the trade to a relayer — its wallet submits and pays gas, not yours")
+  .option("--exact", "trade a precise amount instead of the shared denominations")
+  .option("--max <amount>", "cap on what you will spend (defaults to the quoted price)")
+  .action(async (a: string, b: string | undefined, c: string | undefined, opts: { relay?: string; exact?: boolean; max?: string }) => {
     const { net } = ctx();
-    if (net.contracts.pool) spendsPending(net, "Private trading");
     const sym = net.currency.symbol;
-    const sideNorm = side.toLowerCase();
-    if (sideNorm !== "buy" && sideNorm !== "sell") die('Side must be "buy" or "sell".');
-    const mkey = market.toUpperCase();
-    if (!MARKETS[mkey]) die(`Unknown market "${market}".`, `Known: ${Object.keys(MARKETS).join(", ")}`);
+    const isSim = a.toLowerCase() === "buy" || a.toLowerCase() === "sell";
+
+    // Where the pool is live, a trade is the real thing: one atomic transaction
+    // through the adapter, exact-output shaped.
+    if (net.contracts.pool) {
+      if (isSim) {
+        die(
+          "On-chain trades are exact-output: say what you want to receive.",
+          `cowl trade <amount> <token> — e.g. cowl trade 0.3 USDG, or cowl trade 0.001 ${sym}`,
+        );
+      }
+      if (!b) die("What do you want to receive?", `cowl trade <amount> <token> — e.g. cowl trade 0.3 USDG`);
+      if (!(Number(a) > 0)) die("Amount must be positive.");
+      await tradeOnChain(net, a, b, opts);
+      return;
+    }
+
+    // The local simulation keeps its original buy/sell markets.
+    if (!isSim) die('Side must be "buy" or "sell".');
+    if (!b || !c) die("Usage: cowl trade <side> <amount> <market>");
+    const side = a.toLowerCase();
+    const amount = b;
+    const mkey = c.toUpperCase();
+    if (!MARKETS[mkey]) die(`Unknown market "${c}".`, `Known: ${Object.keys(MARKETS).join(", ")}`);
     if (!(Number(amount) > 0)) die("Amount must be positive.");
 
-    const q = quoteTrade(mkey, sideNorm as Side, parseEther(amount));
+    const q = quoteTrade(mkey, side as Side, parseEther(amount));
     const inField = tokenToField(q.inputSymbol, sym);
     const outField = tokenToField(q.outputSymbol, sym);
     const keys = await shieldedKeys();
@@ -2021,7 +2024,7 @@ program
       const res = poolTrade(net.key, keys, inField, outField, q.amountIn, q.amountOut);
       heading("Private trade");
       row("Market", bone(mkey));
-      row("Side", sideNorm === "buy" ? acid("buy") : acid("sell"));
+      row("Side", side === "buy" ? acid("buy") : acid("sell"));
       row("Spent", `${bold(formatEther(q.amountIn))} ${muted(q.inputSymbol)}`);
       row("Received", `${bold(formatEther(q.amountOut))} ${muted(q.outputSymbol)}`);
       row("Price", muted(`${formatEther(q.priceWad)} ${MARKETS[mkey]!.quote} / ${MARKETS[mkey]!.base}`));
@@ -2033,6 +2036,210 @@ program
       die((e as Error).message);
     }
   });
+
+/**
+ * The real private trade, in one atomic transaction: unshield the input leg to
+ * the adapter, swap it for exactly the output the trader asked for, and shield
+ * that output straight back under their commitment. Revert anywhere and the
+ * trade never happened.
+ *
+ * Exact-output is what makes the shield leg provable before execution: the
+ * output amount is known up front, so the spend proof and the shield proof are
+ * built as a chained pair — one root after the other — on this machine, and
+ * verified back to back on chain.
+ */
+async function tradeOnChain(
+  net: NetworkDef,
+  amount: string,
+  outSpec: string,
+  opts: { relay?: string; exact?: boolean; max?: string },
+): Promise<void> {
+  requireWallet();
+  const venue = net.contracts;
+  if (!venue.quoter || !venue.weth || !venue.usdg) die(`No trade venue on ${net.label} yet.`);
+  if (!venue.tradeAdapter) die(`No trade adapter deployed on ${net.label} yet.`);
+
+  const { quoteExactOutput, submitTrade, poolAddress, adapterAddress } = await import("./shielded/contract.js");
+  const { proveTransfer, proveShield } = await import("./shielded/prove.js");
+  const { syncShieldedPool } = await import("./shielded/sync.js");
+  const { encryptNote, packCipher } = await import("./shielded/crypto.js");
+  const { newNote, commitment: commitNote } = await import("./shielded/note.js");
+  const { appendProof } = await import("./shielded/tree.js");
+  const { hexToField, fieldToHex } = await import("./shielded/field.js");
+  const { stashPendingNote, recordMyNote } = await import("./shielded/pool.js");
+
+  const sym = net.currency.symbol;
+
+  // What leaves the pool and what comes back. The venue pairs the native coin
+  // with USDG, so the input side is simply the other one.
+  const spec = outSpec.toUpperCase();
+  let tokenOutField: bigint;
+  let outDecimals: number;
+  let outLabel: string;
+  if (spec === sym.toUpperCase() || spec === "ETH") {
+    tokenOutField = 0n;
+    outDecimals = 18;
+    outLabel = sym;
+  } else {
+    const addr = spec === "USDG" ? venue.usdg : outSpec;
+    if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) {
+      die(`Unknown token "${outSpec}".`, `Use ${sym}, USDG, or an ERC-20 address.`);
+    }
+    const meta = await tokenMeta(net, addr as Address).catch(() => die(`Can't read ${addr} on ${net.label}.`));
+    tokenOutField = BigInt(addr);
+    outDecimals = meta.decimals;
+    outLabel = meta.symbol;
+  }
+  const tokenInField = tokenOutField === 0n ? BigInt(venue.usdg) : 0n;
+  const inMeta = tokenInField === 0n ? { decimals: 18, symbol: sym } : await tokenMeta(net, venue.usdg);
+
+  const amountOut = parseUnits(amount, outDecimals);
+
+  // Uniform trade sizes, same reasoning as the pool boundary: a trade for an
+  // oddly specific amount is a fingerprint on public liquidity. One tier per
+  // trade; --exact opts out.
+  if (!opts.exact) {
+    const tiers = tiersFor(outDecimals);
+    if (!tiers.includes(amountOut)) {
+      const below = tiers.filter((t) => t < amountOut).at(0);
+      const above = [...tiers].reverse().filter((t) => t > amountOut).at(0);
+      const hints = [
+        above ? `${formatUnits(above, outDecimals)}` : null,
+        below ? `${formatUnits(below, outDecimals)}` : null,
+      ].filter(Boolean);
+      die(
+        `Trades travel in shared sizes: 0.001 · 0.01 · 0.1 · 1 · 10 ${outLabel}.`,
+        `Nearest: ${hints.join(" or ")} ${outLabel} — or add --exact for precisely ${amount}.`,
+      );
+    }
+  }
+
+  // Price it. The venue quoter answers exactly what the router will charge.
+  const inSwap = tokenInField === 0n ? venue.weth : venue.usdg;
+  const outSwap = tokenOutField === 0n ? venue.weth : (`0x${tokenOutField.toString(16).padStart(40, "0")}` as Address);
+  const quotedIn = await quoteExactOutput(net, inSwap, outSwap, amountOut).catch((e) =>
+    die(`The venue can't price that trade: ${(e as Error).message.split("\n")[0]}`),
+  );
+  const maxIn = opts.max ? parseUnits(opts.max, inMeta.decimals) : quotedIn;
+  if (maxIn < quotedIn) {
+    die(
+      `--max ${opts.max} ${inMeta.symbol} is under the quoted price ${formatUnits(quotedIn, inMeta.decimals)} ${inMeta.symbol}.`,
+    );
+  }
+
+  // A relayed trade severs the last link — the gas payer. Fee in the input token.
+  let quote: RelayQuote | null = null;
+  if (opts.relay) {
+    quote = await fetchQuote(opts.relay, tokenInField === 0n ? undefined : venue.usdg, "trade");
+    if (quote.chainId !== net.chainId) die(`That relayer serves chain ${quote.chainId}, not ${net.chainId}.`);
+  }
+  const relayerField = quote ? BigInt(quote.relayer) : 0n;
+  const fee = quote ? quote.fee : 0n;
+
+  heading("Private trade");
+  row("Receive", `${bold(amount)} ${muted(outLabel)} ${muted("· exact")}`);
+  row("Pay", `${bold(formatUnits(quotedIn, inMeta.decimals))} ${muted(inMeta.symbol)}${maxIn !== quotedIn ? muted(` · max ${formatUnits(maxIn, inMeta.decimals)}`) : ""}`);
+  if (quote) {
+    row("Relayer", muted(quote.relayer));
+    row("Fee", muted(`${formatUnits(fee, inMeta.decimals)} ${inMeta.symbol}, paid from shielded funds`));
+  }
+  row("Adapter", muted(adapterAddress(net)!));
+  row("Pool", muted(poolAddress(net)!));
+
+  const go = unwrap(await p.confirm({ message: "Sign and broadcast?", initialValue: false }));
+  if (!go) return;
+
+  const pass = await askPassphrase();
+  const { unlockKeystore } = await import("./keystore.js");
+  const account = unlockKeystore(pass);
+  const keys = deriveShieldedKeys(exportPrivateKey(pass));
+
+  const s = p.spinner();
+  s.start("Syncing the tree");
+  try {
+    await syncShieldedPool(net);
+    poolScan(net.key, keys);
+
+    // Leg one: unshield maxIn + fee to the adapter, change back to us.
+    const built = planUnshield(
+      loadPool(net.key),
+      loadWallet(net.key),
+      keys,
+      maxIn,
+      tokenInField,
+      BigInt(venue.tradeAdapter),
+      BigInt(net.chainId),
+      fee,
+      relayerField,
+    );
+
+    s.message("Proving the spend");
+    const spendProof = await proveTransfer(built.plan);
+
+    // Leg two: shield the exact output, proven against the root leg one makes.
+    const leavesAfter = [
+      ...loadPool(net.key).commitments.map(hexToField),
+      hexToField(spendProof.spend.commitments[0]),
+      hexToField(spendProof.spend.commitments[1]),
+    ];
+    const outNote = newNote(amountOut, tokenOutField, keys.mpk);
+    const outCommitment = commitNote(outNote);
+    const at = appendProof(leavesAfter, outCommitment);
+    if (fieldToHex(at.oldRoot) !== spendProof.spend.newRoot) {
+      throw new Error("The trade legs do not chain — resync and retry.");
+    }
+
+    s.message("Proving the shield");
+    const shieldProof = await proveShield(outNote, outCommitment, at);
+
+    const spendCiphertexts = built.outputs.map((o) => packCipher(encryptNote(o.note, o.viewPubHex))) as [
+      `0x${string}`,
+      `0x${string}`,
+    ];
+    const submission = {
+      spend: spendProof.spend,
+      spendCiphertexts,
+      spendProof: spendProof.proof,
+      tokenOut: tokenOutField,
+      amountOut,
+      poolFee: 3000,
+      shieldCommitment: fieldToHex(outCommitment) as `0x${string}`,
+      shieldNewRoot: fieldToHex(at.newRoot) as `0x${string}`,
+      shieldCiphertext: packCipher(encryptNote(outNote, keys.viewPubHex)),
+      shieldProof: shieldProof.proof,
+    };
+
+    // The output note's secrets go to disk before anything broadcasts.
+    stashPendingNote(net.key, outNote);
+
+    s.message(opts.relay ? "Relaying" : "Broadcasting");
+    const receipt = opts.relay
+      ? await relayTrade(opts.relay, submission)
+      : await submitTrade(net, account, submission);
+
+    try {
+      s.message("Syncing the tree");
+      await syncShieldedPool(net);
+      poolScan(net.key, keys);
+      recordMyNote(net.key, keys, outNote, at.leafIndex);
+    } catch {
+      // The chain is authoritative — the next scan reconciles everything.
+    }
+    s.stop("Private trade confirmed");
+
+    row(
+      "Spent",
+      muted(built.inputLeaves.length === 1 ? `note #${built.inputLeaves[0]}` : `${built.inputLeaves.length} notes`),
+    );
+    row("Received", `${bold(amount)} ${muted(`${outLabel} · note #${at.leafIndex}`)}`);
+    row("Root", muted(fieldToHex(at.newRoot)));
+    row("Gas", muted(receipt.gasUsed.toLocaleString("en-US")));
+    ok(`Private trade on chain. ${muted(txLink(net, receipt.hash))}`);
+  } catch (e) {
+    s.stop("failed");
+    die((e as Error).message);
+  }
+}
 
 program
   .command("stake")

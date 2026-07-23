@@ -13,8 +13,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { Address, PrivateKeyAccount } from "viem";
 import type { NetworkDef } from "../networks.js";
 import { publicClient } from "../chain.js";
-import { poolAddress, simulateSpend, submitSpend } from "../shielded/contract.js";
-import { decodeSpend } from "./client.js";
+import { poolAddress, simulateSpend, submitSpend, simulateTrade, submitTrade } from "../shielded/contract.js";
+import { decodeSpend, decodeTrade } from "./client.js";
 
 /** The V3 quoter surface used to price a fee in a non-native token. */
 const QUOTER_ABI = [
@@ -47,6 +47,9 @@ const QUOTER_ABI = [
 /** Observed spend gas is ~4.6M; quote a spend's worth with headroom. */
 const GAS_PER_SPEND = 5_000_000n;
 
+/** An atomic trade verifies two proofs and swaps — observed ~13.8M. */
+const GAS_PER_TRADE = 15_000_000n;
+
 /** Spends waiting in line before new ones get a 429. Spends serialize on the
  * pool root, so a long queue only grows stale — better to say busy early. */
 const MAX_QUEUE = 8;
@@ -66,9 +69,9 @@ export type RelayEvent =
   | { kind: "relayed"; hash: `0x${string}`; feeWei: bigint; gasUsed: bigint }
   | { kind: "rejected"; reason: string };
 
-async function feeNow(net: NetworkDef, marginPct: number): Promise<bigint> {
+async function feeNow(net: NetworkDef, marginPct: number, gasUnits: bigint = GAS_PER_SPEND): Promise<bigint> {
   const gasPrice = await publicClient(net).getGasPrice();
-  return (gasPrice * GAS_PER_SPEND * BigInt(100 + marginPct)) / 100n;
+  return (gasPrice * gasUnits * BigInt(100 + marginPct)) / 100n;
 }
 
 /**
@@ -136,7 +139,9 @@ export function startRelayServer(
       try {
         const url = new URL(req.url ?? "/", "http://relay");
         if (req.method === "GET" && url.pathname === "/quote") {
-          const feeWei = await feeNow(net, opts.marginPct);
+          // ?op=trade sizes the quote for an atomic trade's gas instead of a spend's.
+          const gasUnits = url.searchParams.get("op") === "trade" ? GAS_PER_TRADE : GAS_PER_SPEND;
+          const feeWei = await feeNow(net, opts.marginPct, gasUnits);
           // ?token=0x… prices the fee in that ERC-20 via the venue quoter; the
           // fee leg of a spend pays in the spend's own token.
           const tokenParam = url.searchParams.get("token");
@@ -227,7 +232,58 @@ export function startRelayServer(
           return;
         }
 
-        send(res, 404, { error: "Unknown endpoint. GET /quote or POST /relay." });
+        if (req.method === "POST" && url.pathname === "/trade") {
+          const raw = await readBody(req, 2 * 1024 * 1024);
+          const t = decodeTrade(JSON.parse(raw) as never);
+
+          // The unshield leg must pay the adapter (not us, not anyone else),
+          // and its fee leg must pay this relayer a trade's worth of gas in
+          // the spend's own token.
+          const adapter = net.contracts.tradeAdapter;
+          if (!adapter) throw new Error("This relayer's network has no trade adapter.");
+          if (t.spend.recipient !== BigInt(adapter)) throw new Error("Trade spend does not pay the adapter.");
+          if (t.spend.relayer !== BigInt(account.address)) throw new Error("Spend does not pay this relayer.");
+          if (t.spend.token > (1n << 160n) - 1n) throw new Error("Bad token in spend.");
+          const tradeFloorWei = await feeNow(net, 0, GAS_PER_TRADE);
+          const tradeFloor =
+            t.spend.token === 0n
+              ? tradeFloorWei
+              : await feeInToken(net, `0x${t.spend.token.toString(16).padStart(40, "0")}` as Address, tradeFloorWei);
+          if (t.spend.fee < tradeFloor) {
+            throw new Reprove(`Fee too low: the trade pays ${t.spend.fee}, gas costs ${tradeFloor}. Re-quote and reprove.`);
+          }
+          if (queued >= MAX_QUEUE) {
+            onEvent({ kind: "rejected", reason: "queue full" });
+            send(res, 429, { error: "Relayer is busy — retry shortly." });
+            return;
+          }
+
+          queued += 1;
+          const job = chain.then(async () => {
+            let receipt;
+            try {
+              try {
+                await simulateTrade(net, account.address, t);
+                receipt = await submitTrade(net, account, t);
+              } catch (e) {
+                throw new Reprove((e as Error).message);
+              }
+            } finally {
+              queued -= 1;
+            }
+            onEvent({ kind: "relayed", hash: receipt.hash, feeWei: t.spend.fee, gasUsed: receipt.gasUsed });
+            send(res, 200, {
+              hash: receipt.hash,
+              gasUsed: receipt.gasUsed.toString(),
+              blockNumber: receipt.blockNumber.toString(),
+            });
+          });
+          chain = job.catch(() => {});
+          await job;
+          return;
+        }
+
+        send(res, 404, { error: "Unknown endpoint. GET /quote, POST /relay, or POST /trade." });
       } catch (e) {
         const reason = (e as Error).message;
         onEvent({ kind: "rejected", reason });
