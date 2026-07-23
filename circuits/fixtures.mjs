@@ -12,7 +12,7 @@
 //
 // Run it after any change to circuits/, then `nargo compile` and regenerate the
 // verifiers — the fixtures are only valid for the exact circuit that made them.
-import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
@@ -32,6 +32,22 @@ const RECIPIENT = 0x00000000000000000000000000000000000b0b00n;
 const RELAYER = 0x0000000000000000000000000000000000c0ffeen;
 
 const client = await bundleClient();
+
+// The CLI proves with the circuits embedded in src/shielded/circuit.ts, not
+// with target/ — so a recompile that skipped `node circuits/embed.mjs` leaves
+// the CLI proving against an old circuit while these fixtures pass against the
+// new one. Catch that drift here, where every other parity break is caught.
+for (const name of ["shield", "transfer"]) {
+  const compiled = JSON.parse(readFileSync(join(TARGET, `${name}.json`), "utf8"));
+  const embedded = name === "shield" ? client.SHIELD_CIRCUIT : client.TRANSFER_CIRCUIT;
+  if (embedded.hash !== compiled.hash) {
+    throw new Error(
+      `${name}: src/shielded/circuit.ts embeds hash ${embedded.hash} but target/${name}.json is ${compiled.hash}. ` +
+        `Run \`node circuits/embed.mjs\` and rebuild.`,
+    );
+  }
+}
+
 const { deriveShieldedKeys, commitment, nullifier, merkleProof, computeRoot, appendProof, fieldToHex } =
   client;
 
@@ -185,7 +201,7 @@ async function bundleClient() {
   mkdirSync(TARGET, { recursive: true });
   writeFileSync(
     entry,
-    ["keys", "note", "tree", "field"].map((m) => `export * from "${CLI}/src/shielded/${m}.js";`).join("\n"),
+    ["keys", "note", "tree", "field", "circuit"].map((m) => `export * from "${CLI}/src/shielded/${m}.js";`).join("\n"),
   );
   await esbuild.build({
     entryPoints: [entry],
