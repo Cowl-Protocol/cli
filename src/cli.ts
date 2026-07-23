@@ -1090,7 +1090,8 @@ program
   .argument("<amount>", "amount, e.g. 0.1")
   .argument("[token]", "native symbol (default) or an ERC-20 address")
   .option("--exact", "move the exact amount in one deposit instead of shared denominations")
-  .action(async (amount: string, token: string | undefined, opts: { exact?: boolean }) => {
+  .option("--spread <window>", "scatter the deposits across a time window (45s, 20m, 3h)")
+  .action(async (amount: string, token: string | undefined, opts: { exact?: boolean; spread?: string }) => {
     const { net } = ctx();
     const sym = net.currency.symbol;
     if (!(Number(amount) > 0)) die("Amount must be positive.");
@@ -1111,7 +1112,7 @@ program
       return;
     }
 
-    await shieldOnChain(net, amount, tokenField, sym, Boolean(opts.exact));
+    await shieldOnChain(net, amount, tokenField, sym, Boolean(opts.exact), opts.spread);
   });
 
 /**
@@ -1190,13 +1191,44 @@ function partsLabel(parts: bigint[], decimals: number): string {
 
 /**
  * A short random gap between consecutive boundary transactions, so a fanned-out
- * command does not stamp one tight timeline on chain. The full version of
- * spread timing — dwell time between entering and leaving the pool — is a
- * relayer-era feature; this just keeps a single command from being its own
- * cluster.
+ * command does not stamp one tight timeline on chain. `--spread` is the full
+ * version: it scatters the parts across a window of the caller's choosing.
  */
 function spacing(): Promise<void> {
   return new Promise((r) => setTimeout(r, 2_000 + Math.floor(Math.random() * 6_000)));
+}
+
+/** Parse a spread window like "45s", "20m", "3h" into milliseconds. */
+function parseSpread(s: string): number {
+  const m = /^([0-9]+)(s|m|h)$/.exec(s.trim());
+  if (!m) die(`Can't read --spread ${s}.`, `Use seconds, minutes or hours: 45s, 20m, 3h.`);
+  const ms = Number(m[1]) * (m[2] === "s" ? 1_000 : m[2] === "m" ? 60_000 : 3_600_000);
+  if (ms > 12 * 3_600_000) {
+    die("Spread caps at 12h.", "The command stays running for the whole window — keep it somewhere it can.");
+  }
+  return ms;
+}
+
+/**
+ * When each part fires: independent random moments across the window, sorted.
+ * Timing correlation is the classic deanonymizer — a burst of transactions
+ * seconds apart is one actor however uniform the amounts — and a scattered
+ * schedule is what breaks it. A single part gets one random moment, which is
+ * exactly a randomized dwell before it fires.
+ */
+function spreadSchedule(n: number, windowMs: number): number[] {
+  return Array.from({ length: n }, () => Math.random() * windowMs).sort((a, b) => a - b);
+}
+
+/** Sleep until `offsetMs` past `startedAt`, with a spinner naming the moment. */
+async function waitUntilOffset(startedAt: number, offsetMs: number, label: string): Promise<void> {
+  const remaining = startedAt + offsetMs - Date.now();
+  if (remaining <= 0) return;
+  const at = new Date(startedAt + offsetMs).toLocaleTimeString();
+  const s = p.spinner();
+  s.start(`${label} fires at ${at}`);
+  await new Promise((r) => setTimeout(r, remaining));
+  s.stop(`${label} — window reached`);
 }
 
 /**
@@ -1210,7 +1242,9 @@ async function shieldOnChain(
   tokenField: bigint,
   sym: string,
   exact: boolean,
+  spread?: string,
 ): Promise<void> {
+  const spreadMs = spread ? parseSpread(spread) : null;
   requireWallet();
   const { proveShield } = await import("./shielded/prove.js");
   const { submitShield, approvePool, poolAddress } = await import("./shielded/contract.js");
@@ -1238,6 +1272,9 @@ async function shieldOnChain(
       muted(`${formatUnits(dust, decimals)} ${label} stays in your wallet — add --exact to include it`),
     );
   }
+  if (spreadMs) {
+    row("Spread", muted(`${spread} — deposits fire at random moments across the window`));
+  }
   row("Pool", muted(poolAddress(net)!));
   row("Network", muted(net.label));
 
@@ -1254,9 +1291,14 @@ async function shieldOnChain(
   // One deposit per denomination part. Each iteration syncs, proves against the
   // fresh root, lands its transaction, and records the note before the next
   // starts — spends serialize on the root anyway, so the parts must too.
+  const startedAt = Date.now();
+  const schedule = spreadMs ? spreadSchedule(parts.length, spreadMs) : null;
   for (let i = 0; i < parts.length; i++) {
     const partValue = parts[i]!;
     const tag = parts.length > 1 ? `Deposit ${i + 1}/${parts.length} — ` : "";
+    if (schedule) {
+      await waitUntilOffset(startedAt, schedule[i]!, parts.length > 1 ? `Deposit ${i + 1}/${parts.length}` : "The deposit");
+    }
     const note = newNote(partValue, tokenField, keys.mpk);
     const c = commitment(note);
 
@@ -1330,7 +1372,7 @@ async function shieldOnChain(
       die(parts.length > 1 ? `Deposit 1 of ${parts.length} failed — ${msg}` : msg);
     }
 
-    if (i < parts.length - 1) await spacing();
+    if (!schedule && i < parts.length - 1) await spacing();
   }
 }
 
@@ -1350,7 +1392,9 @@ async function spendOnChain(
     | ((pool: Pool, wallet: Wallet, keys: ShieldedKeys, payout: bigint) => PlannedSpend)
     | ((pool: Pool, wallet: Wallet, keys: ShieldedKeys, payout: bigint) => PlannedSpend)[],
   relayUrl?: string,
+  spread?: string,
 ): Promise<void> {
+  const spreadMs = spread ? parseSpread(spread) : null;
   requireWallet();
   const { proveTransfer } = await import("./shielded/prove.js");
   const { submitSpend, poolAddress } = await import("./shielded/contract.js");
@@ -1374,8 +1418,13 @@ async function spendOnChain(
   const account = unlockKeystore(pass);
   const keys = deriveShieldedKeys(exportPrivateKey(pass));
 
+  const startedAt = Date.now();
+  const schedule = spreadMs ? spreadSchedule(builders.length, spreadMs) : null;
   for (let i = 0; i < builders.length; i++) {
     const tag = builders.length > 1 ? `${headline} ${i + 1}/${builders.length} — ` : "";
+    if (schedule) {
+      await waitUntilOffset(startedAt, schedule[i]!, builders.length > 1 ? `${headline} ${i + 1}/${builders.length}` : headline);
+    }
     const s = p.spinner();
     s.start(`${tag}Syncing the tree`);
     try {
@@ -1433,7 +1482,7 @@ async function spendOnChain(
       die(builders.length > 1 ? `${headline} 1 of ${builders.length} failed — ${msg}` : msg);
     }
 
-    if (i < builders.length - 1) await spacing();
+    if (!schedule && i < builders.length - 1) await spacing();
   }
 }
 
@@ -1444,7 +1493,8 @@ program
   .argument("[token]", "native symbol (default) or an ERC-20 address")
   .option("--exact", "move the exact amount in one withdrawal instead of shared denominations")
   .option("--relay <url>", "hand the spend to a relayer — its wallet submits and pays gas, not yours")
-  .action(async (amount: string, token: string | undefined, opts: { exact?: boolean; relay?: string }) => {
+  .option("--spread <window>", "scatter the withdrawals across a time window (45s, 20m, 3h)")
+  .action(async (amount: string, token: string | undefined, opts: { exact?: boolean; relay?: string; spread?: string }) => {
     const { net } = ctx();
     const sym = net.currency.symbol;
     if (!(Number(amount) > 0)) die("Amount must be positive.");
@@ -1482,6 +1532,9 @@ program
           if (dust > 0n) {
             row("Remainder", muted(`${formatUnits(dust, decimals)} ${label} stays shielded — add --exact to include it`));
           }
+          if (opts.spread) {
+            row("Spread", muted(`${opts.spread} — withdrawals fire at random moments across the window`));
+          }
           row("To", muted(address));
           if (quote) {
             row("Relayer", muted(quote.relayer));
@@ -1500,6 +1553,7 @@ program
             planUnshield(pool, wallet, keys, part, tokenField, payout, BigInt(net.chainId), feePerSpend, relayerField),
         ),
         opts.relay,
+        opts.spread,
       );
       return;
     }
