@@ -18,8 +18,8 @@
 Terminal CLI for [Cowl Protocol](https://cowlprotocol.com) — private trading on Robinhood Chain.
 Manage a local wallet, generate one-time **stealth addresses**, hold **view keys** for selective
 disclosure, shield and move funds privately, run a **relayer**, and check the **fee** schedule —
-all from your terminal. Live on the Robinhood Chain testnet pool today: `shield`, private `send`
-and `unshield` settle on chain, proven with ZK on your machine, with amounts crossing the boundary
+all from your terminal. Live on the Robinhood Chain testnet pool today: `shield`, private `send`, private `trade`, and
+`unshield` all settle on chain, proven with ZK on your machine, with amounts crossing the boundary
 in shared denominations and relayers keeping your wallet off the gas trail.
 
 ## How it works
@@ -229,6 +229,8 @@ cowl shield 0.1 ETH             # move funds into your shielded balance
 cowl balance --shielded         # your private portfolio, grouped by token
 cowl receive                    # your zcowl: payment address — share it to be paid privately
 cowl send 0.05 ETH zcowl:0x…    # private, in-pool transfer to a zcowl: address
+cowl trade 0.3 USDG             # privately swap your shielded balance for another token
+cowl consolidate                # merge fragmented notes so any amount spends at once
 cowl scan                       # find notes paid to you
 cowl unshield 0.05 ETH          # move funds back out
 ```
@@ -240,7 +242,9 @@ Amounts that cross the pool boundary travel in **shared denominations** by defau
 matched across the boundary. Every 0.1 looks like every other 0.1, and everyone using a tier is
 cover for everyone else in it. A larger amount fans out into a short sequence of transactions with
 one confirmation and randomized gaps between them; amounts below the smallest tier stay where they
-are. Add `--exact` to move the precise amount in a single transaction instead.
+are. Add `--exact` to move the precise amount in a single transaction instead, or `--spread <window>`
+(`45s`, `20m`, `3h`) to scatter the sequence across a window you choose so it leaves no tight
+timeline on chain.
 
 ### Relayers
 
@@ -257,19 +261,38 @@ cowl unshield 0.1 --relay http://…:4663     # the relayer submits and pays gas
 cowl send 0.01 ETH zcowl:0x… --relay http://…:4663
 ```
 
-### Private trades
+### Consolidation
 
-A shielded swap spends a note of one token and mints a note of another, so your size and direction
-never hit the public explorer. `amount` is what you spend: the base for `sell`, the quote for `buy`.
+A join-split spends at most two notes at once, so a balance scattered across many small notes caps
+what a single transfer can move. `cowl consolidate [token]` merges the two smallest each round until
+your balance sits in one — `n` notes settle in `n − 2` private spends, each proven on your machine
+like any other.
 
 ```bash
-cowl markets                    # markets + indicative prices (ETH, USDG, tokenized stocks)
-cowl trade sell 4 TSLA-USDG     # spend 4 TSLA from your shielded balance, receive USDG
-cowl trade buy 240 NVDA-USDG    # spend 240 USDG, receive NVDA
+cowl consolidate                # merge your native-token notes
+cowl consolidate 0x…            # merge a specific ERC-20's notes
 ```
 
-Pricing here is an indicative quote plus the protocol fee; real routing goes through an on-chain DEX
-adapter once the trade circuit ships.
+### Private trades
+
+A private trade spends a shielded note of one token and returns a shielded note of another in **one
+atomic transaction**: your input unshields into the trade adapter, swaps through public liquidity for
+exactly the amount you ask to receive, and shields straight back under a commitment only your keys can
+open. That a swap happened is public; who traded is not — your wallet never appears, and behind a
+relayer and shared trade sizes the trade is unlinkable to you. Any other write to the pool mid-trade
+reverts the whole thing, so a trade completes end to end or never happened.
+
+`amount` is what you want to **receive**; `token` is the native symbol, `USDG`, or an ERC-20 address.
+
+```bash
+cowl trade 0.3 USDG                          # receive exactly 0.3 USDG from your shielded balance
+cowl trade 0.001 ETH                         # receive 0.001 ETH for the counter-asset
+cowl trade 0.3 USDG --max 0.0002 ETH         # cap what you are willing to spend
+cowl trade 0.3 USDG --relay http://…:4663    # a relayer submits and pays the gas, not you
+```
+
+Trades travel in shared sizes by default — the same denominations the boundary uses — so one trade
+looks like the next; `--exact` opts out. Any surplus under `--max` tips the submitter, never you.
 
 ### What settles on chain, and what does not
 
@@ -287,9 +310,10 @@ moves. The chain learns two nullifiers, two opaque commitments, and — only whe
 leaves the pool — the public leg. Change comes back as a fresh note only your keys can find, and
 spent notes are marked from the pool's own log, never guessed.
 
-**`trade` is the one simulation left.** Its circuit has not shipped, and simulating a spend on top
-of a real ledger would corrupt it, so on pool networks the command says so and exits instead of
-pretending. Your notes hold value on chain and trade the moment its circuit lands.
+**`trade` settles on chain too.** One atomic transaction unshields your input to the trade adapter,
+swaps it for exactly the output you asked for, and shields that output straight back — the spend
+proof and the shield proof built as a chained pair on your machine and verified back to back by the
+pool. Revert anywhere along the way and nothing moved.
 
 On networks with no pool contract, the full flow — shield, send, trade, unshield — runs as a local
 simulation: the cryptography is real and value is conserved, but nothing settles. Point a shared
