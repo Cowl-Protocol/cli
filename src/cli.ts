@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import * as p from "@clack/prompts";
-import { isAddress, parseEther, parseUnits, formatEther, type Address } from "viem";
+import { isAddress, parseEther, parseUnits, formatEther, formatUnits, type Address } from "viem";
 import {
   acid,
   bone,
@@ -62,6 +62,7 @@ import { deriveShieldedKeys, decodePaymentAddress, isPaymentAddress, type Shield
 import { tokenToField, tokenLabel } from "./shielded/note.js";
 import { shield as poolShield, unshield as poolUnshield, sendPrivate, balance as poolBalance, scan as poolScan, trade as poolTrade } from "./shielded/pool.js";
 import { planSend, planUnshield, loadPool, loadWallet, type Pool, type Wallet, type PlannedSpend } from "./shielded/pool.js";
+import { decompose, groupParts, tiersFor, MAX_BOUNDARY_TXS } from "./shielded/denominations.js";
 import { MARKETS, PROTOCOL_FEE_BPS, QUOTE_SYMBOL, WAD, priceInQuoteWad, quoteTrade, type Side } from "./shielded/market.js";
 
 /** The wordmark needs ~35 columns; fall back to the compact banner when narrow. */
@@ -1062,7 +1063,8 @@ program
   .description("move funds into your shielded (private) balance")
   .argument("<amount>", "amount, e.g. 0.1")
   .argument("[token]", "native symbol (default) or an ERC-20 address")
-  .action(async (amount: string, token?: string) => {
+  .option("--exact", "move the exact amount in one deposit instead of shared denominations")
+  .action(async (amount: string, token: string | undefined, opts: { exact?: boolean }) => {
     const { net } = ctx();
     const sym = net.currency.symbol;
     if (!(Number(amount) > 0)) die("Amount must be positive.");
@@ -1083,8 +1085,60 @@ program
       return;
     }
 
-    await shieldOnChain(net, amount, tokenField, sym);
+    await shieldOnChain(net, amount, tokenField, sym, Boolean(opts.exact));
   });
+
+/**
+ * Split a boundary amount into denomination parts, or die with guidance.
+ *
+ * Deposits and withdrawals surface their amounts in public calldata, so the
+ * default is to cross the boundary in shared denominations — every 0.1 looks
+ * like every other 0.1. `--exact` opts out; internal sends never come here.
+ */
+function boundaryParts(
+  value: bigint,
+  decimals: number,
+  label: string,
+  exact: boolean,
+): { parts: bigint[]; dust: bigint } {
+  if (exact) return { parts: [value], dust: 0n };
+  const d = decompose(value, decimals);
+  if (d.parts.length === 0) {
+    const smallest = tiersFor(decimals)[tiersFor(decimals).length - 1]!;
+    die(
+      `${formatUnits(value, decimals)} ${label} is below the smallest denomination, ${formatUnits(smallest, decimals)} ${label}.`,
+      `Amounts cross the pool boundary in shared denominations so they never fingerprint you. Add --exact to move it as-is.`,
+    );
+  }
+  if (d.parts.length > MAX_BOUNDARY_TXS) {
+    const top = tiersFor(decimals).find((t) => t <= value)!;
+    const rounded = ((value + top - 1n) / top) * top;
+    const roundedCount = decompose(rounded, decimals).parts.length;
+    die(
+      `${formatUnits(value, decimals)} ${label} splits into ${d.parts.length} transactions — the cap is ${MAX_BOUNDARY_TXS}.`,
+      `Round it (${formatUnits(rounded, decimals)} ${label} goes in ${roundedCount} transaction${roundedCount === 1 ? "" : "s"}) or add --exact for a single transaction.`,
+    );
+  }
+  return { parts: d.parts, dust: d.remainder };
+}
+
+/** Render a plan like "2 × 0.1 + 3 × 0.01" for the confirm screen. */
+function partsLabel(parts: bigint[], decimals: number): string {
+  return groupParts(parts)
+    .map((g) => `${g.count} × ${formatUnits(g.tier, decimals)}`)
+    .join(" + ");
+}
+
+/**
+ * A short random gap between consecutive boundary transactions, so a fanned-out
+ * command does not stamp one tight timeline on chain. The full version of
+ * spread timing — dwell time between entering and leaving the pool — is a
+ * relayer-era feature; this just keeps a single command from being its own
+ * cluster.
+ */
+function spacing(): Promise<void> {
+  return new Promise((r) => setTimeout(r, 2_000 + Math.floor(Math.random() * 6_000)));
+}
 
 /**
  * A real deposit: build the note, prove it, land the transaction, then rebuild the
@@ -1096,6 +1150,7 @@ async function shieldOnChain(
   amount: string,
   tokenField: bigint,
   sym: string,
+  exact: boolean,
 ): Promise<void> {
   requireWallet();
   const { proveShield } = await import("./shielded/prove.js");
@@ -1112,6 +1167,7 @@ async function shieldOnChain(
   // behind them, and a real ERC-20's decimals come from the chain — assuming 18
   // would shield the wrong amount on a 6-decimal token.
   let value: bigint;
+  let decimals = 18;
   let label = tokenLabel(tokenField, sym);
   if (tokenField === 0n) {
     value = parseEther(amount);
@@ -1128,14 +1184,26 @@ async function shieldOnChain(
     try {
       const meta = await tokenMeta(net, addr);
       value = parseUnits(amount, meta.decimals);
+      decimals = meta.decimals;
       label = meta.symbol;
     } catch {
       die(`Can't read that token on ${net.label}.`, `Is ${addr} an ERC-20 on this network?`);
     }
   }
 
+  const { parts, dust } = boundaryParts(value, decimals, label, exact);
+
   heading("Shield");
   row("Amount", `${bold(amount)} ${muted(label)}`);
+  if (parts.length > 1 || dust > 0n) {
+    row("Plan", `${partsLabel(parts, decimals)} ${muted(`${label} · ${parts.length} deposits`)}`);
+  }
+  if (dust > 0n) {
+    row(
+      "Remainder",
+      muted(`${formatUnits(dust, decimals)} ${label} stays in your wallet — add --exact to include it`),
+    );
+  }
   row("Pool", muted(poolAddress(net)!));
   row("Network", muted(net.label));
 
@@ -1149,70 +1217,86 @@ async function shieldOnChain(
   const account = unlockKeystore(pass);
   const keys = deriveShieldedKeys(exportPrivateKey(pass));
 
-  const note = newNote(value, tokenField, keys.mpk);
-  const c = commitment(note);
+  // One deposit per denomination part. Each iteration syncs, proves against the
+  // fresh root, lands its transaction, and records the note before the next
+  // starts — spends serialize on the root anyway, so the parts must too.
+  for (let i = 0; i < parts.length; i++) {
+    const partValue = parts[i]!;
+    const tag = parts.length > 1 ? `Deposit ${i + 1}/${parts.length} — ` : "";
+    const note = newNote(partValue, tokenField, keys.mpk);
+    const c = commitment(note);
 
-  const s = p.spinner();
-  s.start("Syncing the tree");
-  try {
-    // The proof carries the root this deposit moves the tree to, so it is only
-    // valid while the pool's root is the one we just read. Sync immediately
-    // before proving to keep that window as small as it can be — and if someone
-    // else's deposit still slips in first, the chain rejects the proof rather
-    // than accepting a root computed over a tree that no longer exists.
-    await syncShieldedPool(net);
-    const at = appendProof(loadPool(net.key).commitments.map(hexToField), c);
-
-    s.message("Proving");
-    const proof = await proveShield(note, c, at);
-
-    if (tokenField !== 0n) {
-      s.message("Approving the pool");
-      await approvePool(net, account, `0x${tokenField.toString(16).padStart(40, "0")}`, value);
-    }
-
-    s.message("Broadcasting");
-    // The note's secrets go to disk BEFORE the transaction: if anything dies between
-    // the deposit landing and the local files updating, the blinding survives and
-    // `cowl scan` adopts the note once its commitment shows up in the log.
-    stashPendingNote(net.key, note);
-    const receipt = await submitShield(net, account, {
-      token: tokenField,
-      value,
-      commitment: fieldToHex(c) as `0x${string}`,
-      newRoot: fieldToHex(at.newRoot) as `0x${string}`,
-      // The deposit note is minted to you, so it is encrypted to your own view key —
-      // which is what lets another machine recover the deposit on a cold scan.
-      ciphertext: packCipher(encryptNote(note, keys.viewPubHex)),
-      proof,
-    });
-
-    // Past this point the deposit is on chain — a local hiccup must not read as a
-    // failed shield, so sync problems get their own message and a recovery path.
+    const s = p.spinner();
+    s.start(`${tag}Syncing the tree`);
     try {
-      s.message("Syncing the tree");
+      // The proof carries the root this deposit moves the tree to, so it is only
+      // valid while the pool's root is the one we just read. Sync immediately
+      // before proving to keep that window as small as it can be — and if someone
+      // else's deposit still slips in first, the chain rejects the proof rather
+      // than accepting a root computed over a tree that no longer exists.
       await syncShieldedPool(net);
-      const res = recordMyNote(net.key, keys, note, receipt.leafIndex);
-      s.stop("Shielded");
+      const at = appendProof(loadPool(net.key).commitments.map(hexToField), c);
 
-      row("Commitment", muted(res.commitment));
-      row("Leaf", muted(`#${res.leafIndex}`));
-      row("Root", muted(res.root));
-      row("Gas", muted(receipt.gasUsed.toLocaleString("en-US")));
-      ok(`Shielded on chain. ${muted(txLink(net, receipt.hash))}`);
+      s.message(`${tag}Proving`);
+      const proof = await proveShield(note, c, at);
+
+      if (tokenField !== 0n) {
+        s.message(`${tag}Approving the pool`);
+        await approvePool(net, account, `0x${tokenField.toString(16).padStart(40, "0")}`, partValue);
+      }
+
+      s.message(`${tag}Broadcasting`);
+      // The note's secrets go to disk BEFORE the transaction: if anything dies between
+      // the deposit landing and the local files updating, the blinding survives and
+      // `cowl scan` adopts the note once its commitment shows up in the log.
+      stashPendingNote(net.key, note);
+      const receipt = await submitShield(net, account, {
+        token: tokenField,
+        value: partValue,
+        commitment: fieldToHex(c) as `0x${string}`,
+        newRoot: fieldToHex(at.newRoot) as `0x${string}`,
+        // The deposit note is minted to you, so it is encrypted to your own view key —
+        // which is what lets another machine recover the deposit on a cold scan.
+        ciphertext: packCipher(encryptNote(note, keys.viewPubHex)),
+        proof,
+      });
+
+      // Past this point the deposit is on chain — a local hiccup must not read as a
+      // failed shield, so sync problems get their own message and a recovery path.
+      try {
+        s.message(`${tag}Syncing the tree`);
+        await syncShieldedPool(net);
+        const res = recordMyNote(net.key, keys, note, receipt.leafIndex);
+        s.stop(parts.length > 1 ? `Deposit ${i + 1}/${parts.length} shielded` : "Shielded");
+
+        row("Commitment", muted(res.commitment));
+        row("Leaf", muted(`#${res.leafIndex}`));
+        row("Root", muted(res.root));
+        row("Gas", muted(receipt.gasUsed.toLocaleString("en-US")));
+        ok(`Shielded on chain. ${muted(txLink(net, receipt.hash))}`);
+      } catch (e) {
+        s.stop("Shielded, local sync pending");
+        ok(`Deposit landed on chain. ${muted(txLink(net, receipt.hash))}`);
+        console.log(
+          `  ${warnMark()} ${muted("Local sync failed:")} ${dim((e as Error).message.split("\n")[0] ?? "")}`,
+        );
+        console.log(
+          `  ${muted("Your note is stashed — run")} ${bone("cowl scan")} ${muted("to finish once the RPC answers.")}`,
+        );
+      }
     } catch (e) {
-      s.stop("Shielded, local sync pending");
-      ok(`Deposit landed on chain. ${muted(txLink(net, receipt.hash))}`);
-      console.log(
-        `  ${warnMark()} ${muted("Local sync failed:")} ${dim((e as Error).message.split("\n")[0] ?? "")}`,
-      );
-      console.log(
-        `  ${muted("Your note is stashed — run")} ${bone("cowl scan")} ${muted("to finish once the RPC answers.")}`,
-      );
+      s.stop("failed");
+      const msg = (e as Error).message;
+      if (i > 0) {
+        die(
+          `Deposit ${i + 1} of ${parts.length} failed — ${msg}`,
+          `The first ${i} landed and are recorded. Rerun cowl shield for the rest.`,
+        );
+      }
+      die(parts.length > 1 ? `Deposit 1 of ${parts.length} failed — ${msg}` : msg);
     }
-  } catch (e) {
-    s.stop("failed");
-    die((e as Error).message);
+
+    if (i < parts.length - 1) await spacing();
   }
 }
 
@@ -1228,13 +1312,19 @@ async function spendOnChain(
   net: NetworkDef,
   headline: string,
   showRows: () => void,
-  build: (pool: Pool, wallet: Wallet, keys: ShieldedKeys, payout: bigint) => PlannedSpend,
+  build:
+    | ((pool: Pool, wallet: Wallet, keys: ShieldedKeys, payout: bigint) => PlannedSpend)
+    | ((pool: Pool, wallet: Wallet, keys: ShieldedKeys, payout: bigint) => PlannedSpend)[],
 ): Promise<void> {
   requireWallet();
   const { proveTransfer } = await import("./shielded/prove.js");
   const { submitSpend, poolAddress } = await import("./shielded/contract.js");
   const { syncShieldedPool } = await import("./shielded/sync.js");
   const { encryptNote, packCipher } = await import("./shielded/crypto.js");
+
+  // A denominated withdrawal fans out into one spend per part; a private send
+  // is always a single build. Confirm and unlock once either way.
+  const builders = Array.isArray(build) ? build : [build];
 
   heading(headline);
   showRows();
@@ -1249,49 +1339,62 @@ async function spendOnChain(
   const account = unlockKeystore(pass);
   const keys = deriveShieldedKeys(exportPrivateKey(pass));
 
-  const s = p.spinner();
-  s.start("Syncing the tree");
-  try {
-    // A spend is bound to the current root, so sync — and rescan for freshly spent
-    // notes — immediately before selecting inputs, then prove against that state.
-    await syncShieldedPool(net);
-    poolScan(net.key, keys);
-    const built = build(loadPool(net.key), loadWallet(net.key), keys, BigInt(account.address));
-
-    s.message("Proving");
-    const proof = await proveTransfer(built.plan);
-
-    // One ciphertext per output, in the order the proof appended them: the payment
-    // leg to the recipient's view key, the change to yours.
-    const ciphertexts = built.outputs.map((o) => packCipher(encryptNote(o.note, o.viewPubHex))) as [
-      `0x${string}`,
-      `0x${string}`,
-    ];
-
-    s.message("Broadcasting");
-    const receipt = await submitSpend(net, account, proof.spend, ciphertexts, proof.proof);
-
-    // Past here the spend is on chain; a local hiccup must not read as a failure.
+  for (let i = 0; i < builders.length; i++) {
+    const tag = builders.length > 1 ? `${headline} ${i + 1}/${builders.length} — ` : "";
+    const s = p.spinner();
+    s.start(`${tag}Syncing the tree`);
     try {
-      s.message("Syncing the tree");
+      // A spend is bound to the current root, so sync — and rescan for freshly spent
+      // notes — immediately before selecting inputs, then prove against that state.
+      // In a fan-out this also folds the previous part's change back into the wallet.
       await syncShieldedPool(net);
       poolScan(net.key, keys);
-    } catch {
-      // The chain is authoritative — the next scan reconciles the change note.
-    }
-    s.stop(`${headline} confirmed`);
+      const built = builders[i]!(loadPool(net.key), loadWallet(net.key), keys, BigInt(account.address));
 
-    row(
-      "Spent",
-      muted(built.inputLeaves.length === 1 ? `note #${built.inputLeaves[0]}` : `${built.inputLeaves.length} notes`),
-    );
-    row("Output leaves", muted(`#${proof.insertIndex}, #${proof.insertIndex + 1}`));
-    row("Root", muted(proof.spend.newRoot));
-    row("Gas", muted(receipt.gasUsed.toLocaleString("en-US")));
-    ok(`${headline} on chain. ${muted(txLink(net, receipt.hash))}`);
-  } catch (e) {
-    s.stop("failed");
-    die((e as Error).message);
+      s.message(`${tag}Proving`);
+      const proof = await proveTransfer(built.plan);
+
+      // One ciphertext per output, in the order the proof appended them: the payment
+      // leg to the recipient's view key, the change to yours.
+      const ciphertexts = built.outputs.map((o) => packCipher(encryptNote(o.note, o.viewPubHex))) as [
+        `0x${string}`,
+        `0x${string}`,
+      ];
+
+      s.message(`${tag}Broadcasting`);
+      const receipt = await submitSpend(net, account, proof.spend, ciphertexts, proof.proof);
+
+      // Past here the spend is on chain; a local hiccup must not read as a failure.
+      try {
+        s.message(`${tag}Syncing the tree`);
+        await syncShieldedPool(net);
+        poolScan(net.key, keys);
+      } catch {
+        // The chain is authoritative — the next scan reconciles the change note.
+      }
+      s.stop(builders.length > 1 ? `${headline} ${i + 1}/${builders.length} confirmed` : `${headline} confirmed`);
+
+      row(
+        "Spent",
+        muted(built.inputLeaves.length === 1 ? `note #${built.inputLeaves[0]}` : `${built.inputLeaves.length} notes`),
+      );
+      row("Output leaves", muted(`#${proof.insertIndex}, #${proof.insertIndex + 1}`));
+      row("Root", muted(proof.spend.newRoot));
+      row("Gas", muted(receipt.gasUsed.toLocaleString("en-US")));
+      ok(`${headline} on chain. ${muted(txLink(net, receipt.hash))}`);
+    } catch (e) {
+      s.stop("failed");
+      const msg = (e as Error).message;
+      if (i > 0) {
+        die(
+          `${headline} ${i + 1} of ${builders.length} failed — ${msg}`,
+          `The first ${i} settled on chain and are recorded. Rerun the command for the rest.`,
+        );
+      }
+      die(builders.length > 1 ? `${headline} 1 of ${builders.length} failed — ${msg}` : msg);
+    }
+
+    if (i < builders.length - 1) await spacing();
   }
 }
 
@@ -1300,7 +1403,8 @@ program
   .description("move funds out of your shielded balance")
   .argument("<amount>", "amount, e.g. 0.1")
   .argument("[token]", "native symbol (default) or an ERC-20 address")
-  .action(async (amount: string, token?: string) => {
+  .option("--exact", "move the exact amount in one withdrawal instead of shared denominations")
+  .action(async (amount: string, token: string | undefined, opts: { exact?: boolean }) => {
     const { net } = ctx();
     const sym = net.currency.symbol;
     if (!(Number(amount) > 0)) die("Amount must be positive.");
@@ -1309,14 +1413,25 @@ program
     // Where the pool is live the withdrawal is a real join-split with a public leg.
     if (net.contracts.pool) {
       const address = requireWallet();
+      const label = tokenLabel(tokenField, sym);
+      const { parts, dust } = boundaryParts(value, 18, label, Boolean(opts.exact));
       await spendOnChain(
         net,
         "Unshield",
         () => {
-          row("Amount", `${bold(amount)} ${muted(tokenLabel(tokenField, sym))}`);
+          row("Amount", `${bold(amount)} ${muted(label)}`);
+          if (parts.length > 1 || dust > 0n) {
+            row("Plan", `${partsLabel(parts, 18)} ${muted(`${label} · ${parts.length} withdrawals`)}`);
+          }
+          if (dust > 0n) {
+            row("Remainder", muted(`${formatUnits(dust, 18)} ${label} stays shielded — add --exact to include it`));
+          }
           row("To", muted(address));
         },
-        (pool, wallet, keys, payout) => planUnshield(pool, wallet, keys, value, tokenField, payout, BigInt(net.chainId)),
+        parts.map(
+          (part) => (pool: Pool, wallet: Wallet, keys: ShieldedKeys, payout: bigint) =>
+            planUnshield(pool, wallet, keys, part, tokenField, payout, BigInt(net.chainId)),
+        ),
       );
       return;
     }
