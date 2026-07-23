@@ -13,11 +13,15 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { PrivateKeyAccount } from "viem";
 import type { NetworkDef } from "../networks.js";
 import { publicClient } from "../chain.js";
-import { poolAddress, submitSpend } from "../shielded/contract.js";
+import { poolAddress, simulateSpend, submitSpend } from "../shielded/contract.js";
 import { decodeSpend } from "./client.js";
 
 /** Observed spend gas is ~4.6M; quote a spend's worth with headroom. */
 const GAS_PER_SPEND = 5_000_000n;
+
+/** Spends waiting in line before new ones get a 429. Spends serialize on the
+ * pool root, so a long queue only grows stale — better to say busy early. */
+const MAX_QUEUE = 8;
 
 /** A rejection the spender fixes by re-quoting and reproving (409), as opposed
  * to a malformed payload (400). */
@@ -79,6 +83,7 @@ export function startRelayServer(
   // Spends serialize on the pool root, so relay them one at a time — a queue,
   // not a race the loser of which burns the relayer's gas on a revert.
   let chain: Promise<void> = Promise.resolve();
+  let queued = 0;
 
   const server = createServer((req, res) => {
     void (async () => {
@@ -114,21 +119,41 @@ export function startRelayServer(
           if (spend.fee < floor) {
             throw new Reprove(`Fee too low: the spend pays ${spend.fee} wei, gas costs ${floor}. Re-quote and reprove.`);
           }
+          if (queued >= MAX_QUEUE) {
+            onEvent({ kind: "rejected", reason: "queue full" });
+            send(res, 429, { error: "Relayer is busy — retry shortly." });
+            return;
+          }
 
+          queued += 1;
           const job = chain.then(async () => {
             let receipt;
             try {
-              receipt = await submitSpend(
-                net,
-                account,
-                spend,
-                cts as [`0x${string}`, `0x${string}`],
-                proof as `0x${string}`,
-              );
-            } catch (e) {
-              // Stale root, spent nullifier, invalid proof — the chain said no;
-              // the spend has to be rebuilt against fresh state.
-              throw new Reprove((e as Error).message);
+              // Dry-run against current state first: an invalid proof or a
+              // stale root rejects as a free eth_call, never as a reverted
+              // transaction the relayer paid gas for.
+              try {
+                await simulateSpend(
+                  net,
+                  account.address,
+                  spend,
+                  cts as [`0x${string}`, `0x${string}`],
+                  proof as `0x${string}`,
+                );
+                receipt = await submitSpend(
+                  net,
+                  account,
+                  spend,
+                  cts as [`0x${string}`, `0x${string}`],
+                  proof as `0x${string}`,
+                );
+              } catch (e) {
+                // Stale root, spent nullifier, invalid proof — the chain said no;
+                // the spend has to be rebuilt against fresh state.
+                throw new Reprove((e as Error).message);
+              }
+            } finally {
+              queued -= 1;
             }
             onEvent({ kind: "relayed", hash: receipt.hash, feeWei: spend.fee, gasUsed: receipt.gasUsed });
             send(res, 200, {

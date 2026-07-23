@@ -15,6 +15,25 @@ import { toViemChain, type NetworkDef } from "../networks.js";
 import type { ShieldProof, SpendStruct } from "./prove.js";
 
 export const SHIELDED_POOL_ABI = [
+  // Custom errors, so a revert decodes to its name instead of a raw selector —
+  // a relayer's rejection message is only as good as this list.
+  { type: "error", name: "DuplicateCommitment", inputs: [] },
+  { type: "error", name: "TreeFull", inputs: [] },
+  { type: "error", name: "ZeroValue", inputs: [] },
+  { type: "error", name: "NotAField", inputs: [] },
+  { type: "error", name: "WrongDeposit", inputs: [] },
+  { type: "error", name: "InvalidProof", inputs: [] },
+  { type: "error", name: "TransferFailed", inputs: [] },
+  { type: "error", name: "UnknownRoot", inputs: [] },
+  { type: "error", name: "AlreadySpent", inputs: [] },
+  { type: "error", name: "RepeatedNullifier", inputs: [] },
+  { type: "error", name: "NoRecipient", inputs: [] },
+  { type: "error", name: "BadCipherLength", inputs: [] },
+  { type: "error", name: "ExceedsPooledValue", inputs: [] },
+  { type: "error", name: "NotOwner", inputs: [] },
+  { type: "error", name: "NoPendingSwap", inputs: [] },
+  { type: "error", name: "SwapNotReady", inputs: [] },
+  { type: "error", name: "ZeroAddress", inputs: [] },
   {
     type: "function",
     name: "shield",
@@ -153,6 +172,44 @@ export type SpendReceipt = {
   /** Both output leaves the contract assigned, paired to their commitment. */
   outputs: { commitment: `0x${string}`; leafIndex: number }[];
 };
+
+/**
+ * Dry-run a spend against the pool's current state without paying for it.
+ * A relayer runs this before submitting: an invalid proof, a stale root, or a
+ * spent nullifier rejects here as a free eth_call instead of a reverted
+ * transaction whose gas the relayer would have eaten.
+ */
+export async function simulateSpend(
+  net: NetworkDef,
+  from: Address,
+  spend: SpendStruct,
+  ciphertexts: [`0x${string}`, `0x${string}`],
+  proof: `0x${string}`,
+): Promise<void> {
+  const pool = poolAddress(net);
+  if (!pool) throw new Error(`No shielded pool deployed on ${net.label}.`);
+  await publicClient(net).simulateContract({
+    account: from,
+    address: pool,
+    abi: SHIELDED_POOL_ABI,
+    functionName: "spend",
+    args: [
+      {
+        membershipRoot: spend.membershipRoot,
+        nullifiers: [spend.nullifiers[0], spend.nullifiers[1]],
+        commitments: [spend.commitments[0], spend.commitments[1]],
+        newRoot: spend.newRoot,
+        token: spend.token,
+        value: spend.value,
+        fee: spend.fee,
+        recipient: fieldToAddress(spend.recipient),
+        relayer: fieldToAddress(spend.relayer),
+      },
+      ciphertexts,
+      proof,
+    ],
+  });
+}
 
 /**
  * Submit a join-split spend. The Spend struct and the two ciphertexts come from
