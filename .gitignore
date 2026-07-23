@@ -10,3 +10,5 @@ dist
 circuits/target/*
 !circuits/target/shield-fixture/
 !circuits/target/transfer-fixture/
+!circuits/target/trade-spend-fixture/
+!circuits/target/trade-shield-fixture/

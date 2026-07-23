@@ -149,14 +149,108 @@ await proveInto("transfer", spendInput, [
   fieldToHex(CHAIN_ID),
 ]);
 
+// ------------------------------------------------------------------ trade ---
+// The adapter's chained pair: the same deposited note takes the other fork of
+// history. 300 wei leave to the trade adapter, the venue swaps them for 900
+// USDG units (the test sets the rate so that lands exactly), and the shield
+// proof puts those 900 straight back — proven against the root the spend
+// produces, so the two verify back to back in one transaction.
+//
+// The adapter and token addresses are constants: the Foundry test reads them
+// out of these fixtures' public inputs and etches its contracts at exactly
+// those addresses, so nothing here can drift from what the proofs bind.
+
+const ADAPTER = 0x0000000000000000000000000000000000ada97en;
+const USDG_TOKEN = 0x00000000000000000000000000000000000d0116n;
+const TRADE_OUT = 300n; // wei unshielded to the adapter
+const USDG_OUT = 900n; // units shielded back
+const dummyIndex2 = 0x7ea1ba5eba22n;
+
+const tradeChange = { value: DEPOSIT - TRADE_OUT, token, mpk: keys.mpk, blinding: 31n };
+const tradeFiller = { value: 0n, token, mpk: keys.mpk, blinding: 32n };
+const tradeOuts = [tradeChange, tradeFiller].map(commitment);
+const tApp1 = appendProof([c0], tradeOuts[0]);
+const tApp2 = appendProof([c0, tradeOuts[0]], tradeOuts[1]);
+
+const tradeSpendInput = {
+  sk: fieldToHex(keys.sk),
+  token: fieldToHex(token),
+  in_value: [fieldToHex(DEPOSIT), fieldToHex(0n)],
+  in_blinding: [fieldToHex(deposited.blinding), fieldToHex(12n)],
+  in_leaf_index: [fieldToHex(0n), fieldToHex(dummyIndex2)],
+  in_path: [inputProof.pathElements.map(fieldToHex), inputProof.pathElements.map(fieldToHex)],
+  in_right: [inputProof.pathIndices.map((b) => b === 1), inputProof.pathIndices.map((b) => b === 1)],
+  out_mpk: [tradeChange, tradeFiller].map((o) => fieldToHex(o.mpk)),
+  out_value: [tradeChange, tradeFiller].map((o) => fieldToHex(o.value)),
+  out_blinding: [tradeChange, tradeFiller].map((o) => fieldToHex(o.blinding)),
+  out_path: [tApp1.pathElements.map(fieldToHex), tApp2.pathElements.map(fieldToHex)],
+  out_right: [tApp1.right, tApp2.right],
+  membership_root: fieldToHex(membershipRoot),
+  nullifiers: [fieldToHex(nullifier(keys.nk, 0)), fieldToHex(nullifier(keys.nk, dummyIndex2))],
+  out_commitments: tradeOuts.map(fieldToHex),
+  old_root: fieldToHex(membershipRoot),
+  new_root: fieldToHex(tApp2.newRoot),
+  insert_index: fieldToHex(BigInt(tApp1.leafIndex)),
+  public_token: fieldToHex(token),
+  public_value: fieldToHex(TRADE_OUT),
+  fee: fieldToHex(0n),
+  recipient: fieldToHex(ADAPTER),
+  relayer: fieldToHex(0n),
+  chain_id: fieldToHex(CHAIN_ID),
+};
+await proveInto("trade-spend", tradeSpendInput, [
+  fieldToHex(membershipRoot),
+  fieldToHex(nullifier(keys.nk, 0)),
+  fieldToHex(nullifier(keys.nk, dummyIndex2)),
+  ...tradeOuts.map(fieldToHex),
+  fieldToHex(membershipRoot),
+  fieldToHex(tApp2.newRoot),
+  fieldToHex(BigInt(tApp1.leafIndex)),
+  fieldToHex(token),
+  fieldToHex(TRADE_OUT),
+  fieldToHex(0n),
+  fieldToHex(ADAPTER),
+  fieldToHex(0n),
+  fieldToHex(CHAIN_ID),
+], "transfer");
+
+const usdgNote = { value: USDG_OUT, token: USDG_TOKEN, mpk: keys.mpk, blinding: 33n };
+const cUsdg = commitment(usdgNote);
+const shieldBack = appendProof([c0, tradeOuts[0], tradeOuts[1]], cUsdg);
+if (fieldToHex(shieldBack.oldRoot) !== fieldToHex(tApp2.newRoot)) {
+  throw new Error("trade fixtures do not chain: the shield-back root must follow the spend");
+}
+const tradeShieldInput = {
+  mpk: fieldToHex(keys.mpk),
+  blinding: fieldToHex(usdgNote.blinding),
+  insert_path: shieldBack.pathElements.map(fieldToHex),
+  insert_right: shieldBack.right,
+  token: fieldToHex(USDG_TOKEN),
+  value: fieldToHex(USDG_OUT),
+  commitment: fieldToHex(cUsdg),
+  old_root: fieldToHex(shieldBack.oldRoot),
+  new_root: fieldToHex(shieldBack.newRoot),
+  leaf_index: fieldToHex(BigInt(shieldBack.leafIndex)),
+};
+await proveInto("trade-shield", tradeShieldInput, [
+  fieldToHex(USDG_TOKEN),
+  fieldToHex(USDG_OUT),
+  fieldToHex(cUsdg),
+  fieldToHex(shieldBack.oldRoot),
+  fieldToHex(shieldBack.newRoot),
+  fieldToHex(BigInt(shieldBack.leafIndex)),
+], "shield");
+
 console.log("\nfixtures written to circuits/target/{shield,transfer}-fixture/");
 
 // ---------------------------------------------------------------- helpers ---
 
-/** Prove `input` against the compiled circuit and write proof + public inputs. */
-async function proveInto(name, input, expectedPublicInputs) {
+/** Prove `input` against the compiled circuit and write proof + public inputs.
+ * `circuitName` defaults to `name` — the trade fixtures reuse the transfer and
+ * shield circuits under their own fixture names. */
+async function proveInto(name, input, expectedPublicInputs, circuitName = name) {
   const circuit = JSON.parse(
-    await import("node:fs").then((fs) => fs.readFileSync(join(TARGET, `${name}.json`), "utf8")),
+    await import("node:fs").then((fs) => fs.readFileSync(join(TARGET, `${circuitName}.json`), "utf8")),
   );
   const { witness } = await new Noir(circuit).execute(input);
 
