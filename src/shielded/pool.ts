@@ -290,7 +290,12 @@ function planInputs(inputs: StoredNote[]): SpendPlan["inputs"] {
   return inputs.map((n) => ({ value: hexToField(n.value), blinding: hexToField(n.blinding), leafIndex: n.leafIndex }));
 }
 
-/** Plan a private send: `value` to the recipient, change back to you, no public leg. */
+/**
+ * Plan a private send: `value` to the recipient, change back to you, no public
+ * leg. Relayed, it is the most private operation the pool has — the sender's
+ * wallet appears nowhere on chain. The only public artifact is the relayer's
+ * `fee` payout; the amount, the parties, and both output notes stay hidden.
+ */
 export function planSend(
   pool: Pool,
   wallet: Wallet,
@@ -299,11 +304,13 @@ export function planSend(
   value: bigint,
   token: bigint,
   chainId: bigint,
+  fee: bigint = 0n,
+  relayer: bigint = 0n,
 ): PlannedSpend {
-  const inputs = selectUpTo2(wallet, token, value);
+  const inputs = selectUpTo2(wallet, token, value + fee);
   const total = inputs.reduce((s, n) => s + hexToField(n.value), 0n);
   const out0: Note = { value, token, mpk: recipient.mpk, blinding: randomField() };
-  const out1: Note = { value: total - value, token, mpk: keys.mpk, blinding: randomField() };
+  const out1: Note = { value: total - value - fee, token, mpk: keys.mpk, blinding: randomField() };
   return {
     plan: {
       sk: keys.sk,
@@ -314,9 +321,9 @@ export function planSend(
       leaves: pool.commitments.map(hexToField),
       publicToken: token,
       publicValue: 0n,
-      fee: 0n,
+      fee,
       recipient: 0n,
-      relayer: 0n,
+      relayer,
       chainId,
     },
     outputs: [

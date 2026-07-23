@@ -970,7 +970,8 @@ program
   .argument("<amount>", "amount, e.g. 0.01")
   .argument("<token>", "native symbol (e.g. ETH) or an ERC-20 address")
   .argument("<to>", "recipient: 0x address (public) or zcowl: address (private)")
-  .action(async (amount: string, token: string, to: string) => {
+  .option("--relay <url>", "hand a private send to a relayer — your wallet never touches the chain")
+  .action(async (amount: string, token: string, to: string, opts: { relay?: string }) => {
     const { net } = ctx();
     if (!(Number(amount) > 0)) die("Amount must be positive.");
 
@@ -982,14 +983,34 @@ program
       const value = parseEther(amount);
       // Where the pool is live the send is a real join-split; elsewhere it is the sim.
       if (net.contracts.pool) {
+        // Relayed, the sender's wallet appears nowhere: the relayer submits and
+        // takes its fee from the same shielded notes, bound into the proof. The
+        // fee payout is the one public artifact — it names the token, never the
+        // amount or the parties.
+        let quote: RelayQuote | null = null;
+        if (opts.relay) {
+          if (tokenField !== 0n) die(`Relayed sends carry the native coin. Send ${sym}, or drop --relay.`);
+          quote = await fetchQuote(opts.relay);
+          if (quote.chainId !== net.chainId) {
+            die(`That relayer serves chain ${quote.chainId}, not ${net.chainId}.`);
+          }
+        }
+        const relayerField = quote ? BigInt(quote.relayer) : 0n;
+        const fee = quote ? quote.feeWei : 0n;
         await spendOnChain(
           net,
           "Private send",
           () => {
             row("To", bone(to.slice(0, 22) + "…"));
             row("Amount", `${bold(amount)} ${muted(tokenLabel(tokenField, sym))}`);
+            if (quote) {
+              row("Relayer", muted(quote.relayer));
+              row("Fee", muted(`${formatEther(fee)} ${sym}, paid from shielded funds`));
+            }
           },
-          (pool, wallet, keys) => planSend(pool, wallet, keys, recipient, value, tokenField, BigInt(net.chainId)),
+          (pool, wallet, keys) =>
+            planSend(pool, wallet, keys, recipient, value, tokenField, BigInt(net.chainId), fee, relayerField),
+          opts.relay,
         );
         return;
       }
