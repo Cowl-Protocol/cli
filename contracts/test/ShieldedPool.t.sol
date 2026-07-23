@@ -30,6 +30,28 @@ contract MockVerifier is IVerifier {
     }
 }
 
+/// A no-frills ERC-20 for the per-token turnstile tests. It ignores allowances —
+/// the pool's accounting, not the token's, is what these tests exercise.
+contract MockERC20 {
+    mapping(address => uint256) public balanceOf;
+
+    function mint(address to, uint256 amount) external {
+        balanceOf[to] += amount;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+}
+
 /// Everything the pool enforces on its own, with the proof stubbed out. The
 /// circuits are checked separately (nargo test) and end to end below.
 contract ShieldedPoolTest is Test {
@@ -265,6 +287,111 @@ contract ShieldedPoolTest is Test {
         }
         assertFalse(pool.knownRoot(first));
         assertTrue(pool.knownRoot(pool.root()));
+    }
+
+    // ------------------------------------------- value-conservation cap ---
+    //
+    // The turnstile (Zcash ZIP-209): the pool tracks net custody per token and
+    // never pays out more of a token than was ever deposited. This holds even
+    // if a circuit soundness bug forged notes, so it bounds the blast radius of
+    // any undiscovered counterfeit to one token's real deposits.
+
+    function test_pooled_value_starts_at_zero() public view {
+        assertEq(pool.pooledValue(0), 0);
+    }
+
+    function test_shield_credits_pooled_value() public {
+        pool.shield{value: 1000}(0, 1000, _f("commitment"), _f("root-1"), okCipher(), "");
+        assertEq(pool.pooledValue(0), 1000);
+    }
+
+    function test_spend_debits_pooled_value_by_value_plus_fee() public {
+        ShieldedPool.Spend memory s = _fundedPool(); // 1000 in, then 250 + 50 out
+        pool.spend(s, okCiphers(), "");
+        assertEq(pool.pooledValue(0), 700);
+    }
+
+    function test_private_send_leaves_pooled_value_untouched() public {
+        ShieldedPool.Spend memory s = _fundedPool();
+        s.value = 0;
+        s.fee = 0;
+        pool.spend(s, okCiphers(), "");
+        assertEq(pool.pooledValue(0), 1000);
+    }
+
+    function test_spend_cannot_withdraw_more_than_was_deposited() public {
+        ShieldedPool.Spend memory s = _fundedPool(); // 1000 in
+        s.value = 1000;
+        s.fee = 50; // outflow 1050 > 1000
+        vm.expectRevert(ShieldedPool.ExceedsPooledValue.selector);
+        pool.spend(s, okCiphers(), "");
+    }
+
+    function test_spend_can_drain_exactly_to_zero() public {
+        ShieldedPool.Spend memory s = _fundedPool();
+        s.value = 950;
+        s.fee = 50; // outflow 1000 == pooled
+        pool.spend(s, okCiphers(), "");
+        assertEq(pool.pooledValue(0), 0);
+        assertEq(address(pool).balance, 0);
+    }
+
+    /// The turnstile is per token: a native deposit cannot back the withdrawal
+    /// of a different asset, not even one wei of it.
+    function test_turnstile_is_per_token() public {
+        pool.shield{value: 1000}(0, 1000, _f("commitment"), _f("root-1"), okCipher(), "");
+        ShieldedPool.Spend memory s = _spend();
+        s.token = 0x1111; // an ERC-20 with nothing deposited
+        s.value = 1;
+        s.fee = 0;
+        vm.expectRevert(ShieldedPool.ExceedsPooledValue.selector);
+        pool.spend(s, okCiphers(), "");
+    }
+
+    /// A later withdrawal is bounded by whatever the earlier ones left behind.
+    function test_turnstile_bounds_the_running_balance() public {
+        ShieldedPool.Spend memory s = _fundedPool(); // 1000 in
+        s.value = 600;
+        s.fee = 0;
+        pool.spend(s, okCiphers(), ""); // leaves 400
+        assertEq(pool.pooledValue(0), 400);
+
+        ShieldedPool.Spend memory again = _spend();
+        again.membershipRoot = pool.root();
+        again.nullifiers = [_f("m0"), _f("m1")];
+        again.commitments = [_f("d0"), _f("d1")];
+        again.value = 401; // over the remaining 400
+        again.fee = 0;
+        vm.expectRevert(ShieldedPool.ExceedsPooledValue.selector);
+        pool.spend(again, okCiphers(), "");
+    }
+
+    function test_erc20_turnstile_tracks_and_bounds_per_token() public {
+        MockERC20 tok = new MockERC20();
+        uint256 id = uint256(uint160(address(tok)));
+        tok.mint(address(this), 1000);
+        pool.shield(id, 1000, _f("commitment"), _f("root-1"), okCipher(), "");
+        assertEq(pool.pooledValue(id), 1000);
+        assertEq(pool.pooledValue(0), 0); // native untouched
+
+        ShieldedPool.Spend memory s = _spend();
+        s.token = id;
+        s.value = 300;
+        s.fee = 50;
+        pool.spend(s, okCiphers(), "");
+        assertEq(pool.pooledValue(id), 650);
+        assertEq(tok.balanceOf(s.recipient), 300);
+        assertEq(tok.balanceOf(s.relayer), 50);
+
+        ShieldedPool.Spend memory again = _spend();
+        again.membershipRoot = pool.root();
+        again.nullifiers = [_f("m0"), _f("m1")];
+        again.commitments = [_f("d0"), _f("d1")];
+        again.token = id;
+        again.value = 651; // over the remaining 650
+        again.fee = 0;
+        vm.expectRevert(ShieldedPool.ExceedsPooledValue.selector);
+        pool.spend(again, okCiphers(), "");
     }
 }
 

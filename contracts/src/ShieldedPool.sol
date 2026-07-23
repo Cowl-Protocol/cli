@@ -90,6 +90,14 @@ contract ShieldedPool {
     mapping(bytes32 => bool) public committed;
     mapping(bytes32 => bool) public nullifierSpent;
 
+    /// Net value the pool custodies per token — deposits minus withdrawals. The
+    /// turnstile: a spend can never pay out more of a token than was ever put
+    /// in, so even a soundness bug that forged notes could not withdraw value
+    /// no one deposited. The blast radius of any undiscovered counterfeit is one
+    /// token's real deposits, not the whole pool. Modeled on Zcash's ZIP-209
+    /// turnstile and independent of proof soundness — the last line of defense.
+    mapping(uint256 => uint256) public pooledValue;
+
     /// Only what a client needs to rebuild the tree. A deposit's token and value
     /// are deliberately absent — they are already public on the deposit path, so
     /// repeating them here bought nothing and left a permanently indexed record
@@ -113,6 +121,7 @@ contract ShieldedPool {
     error RepeatedNullifier();
     error NoRecipient();
     error BadCipherLength();
+    error ExceedsPooledValue();
 
     constructor(IVerifier _shieldVerifier, IVerifier _transferVerifier) {
         shieldVerifier = _shieldVerifier;
@@ -144,6 +153,7 @@ contract ShieldedPool {
         // Effects before the proof and the funds pull: the commitment can never
         // be replayed, even through a reentrant ERC-20.
         committed[commitment] = true;
+        pooledValue[token] += value;
         uint32 leafIndex = nextLeafIndex++;
         bytes32 oldRoot = root;
         _advanceRoot(newRoot);
@@ -207,6 +217,13 @@ contract ShieldedPool {
         if (ciphertexts[0].length != NOTE_CIPHER_LEN || ciphertexts[1].length != NOTE_CIPHER_LEN) {
             revert BadCipherLength();
         }
+        // The turnstile. Whatever leaves is value + fee in `token`, and it can
+        // never exceed what was deposited for that token. A pure private send
+        // has outflow 0, so it leaves the accounting — and its unconstrained
+        // `token` — untouched. Fields are already checked below FR above, so the
+        // sum cannot overflow.
+        uint256 outflow = s.value + s.fee;
+        if (outflow > pooledValue[s.token]) revert ExceedsPooledValue();
 
         uint32 insertIndex = nextLeafIndex;
         bytes32 oldRoot = root;
@@ -217,6 +234,7 @@ contract ShieldedPool {
         nullifierSpent[s.nullifiers[1]] = true;
         committed[s.commitments[0]] = true;
         committed[s.commitments[1]] = true;
+        if (outflow != 0) pooledValue[s.token] -= outflow;
         nextLeafIndex = insertIndex + 2;
         _advanceRoot(s.newRoot);
 
