@@ -17,9 +17,10 @@
 
 Terminal CLI for [Cowl Protocol](https://cowlprotocol.com) — private trading on Robinhood Chain.
 Manage a local wallet, generate one-time **stealth addresses**, hold **view keys** for selective
-disclosure, read balances, send funds, and check the **fee** schedule — all from your terminal.
-Testnet-first: everything that can be real today is real; on-chain shielded-pool operations light
-up as the protocol contracts deploy.
+disclosure, shield and move funds privately, run a **relayer**, and check the **fee** schedule —
+all from your terminal. Live on the Robinhood Chain testnet pool today: `shield`, private `send`
+and `unshield` settle on chain, proven with ZK on your machine, with amounts crossing the boundary
+in shared denominations and relayers keeping your wallet off the gas trail.
 
 ## How it works
 
@@ -232,6 +233,30 @@ cowl scan                       # find notes paid to you
 cowl unshield 0.05 ETH          # move funds back out
 ```
 
+### Denominations
+
+Amounts that cross the pool boundary travel in **shared denominations** by default — 0.001 · 0.01
+· 0.1 · 1 · 10 — so a deposit or withdrawal never carries a one-of-a-kind number that can be
+matched across the boundary. Every 0.1 looks like every other 0.1, and everyone using a tier is
+cover for everyone else in it. A larger amount fans out into a short sequence of transactions with
+one confirmation and randomized gaps between them; amounts below the smallest tier stay where they
+are. Add `--exact` to move the precise amount in a single transaction instead.
+
+### Relayers
+
+A relayer submits your proven spend from its own wallet and earns a fee that is bound into the
+proof — it can redirect nothing, and your wallet never surfaces as the gas payer. A relayed
+private send is the most private operation the pool has: the chain records the relayer, two opaque
+commitments, two nullifiers, and nothing else. A relayed withdrawal can land on a fresh address
+that holds no gas at all.
+
+```bash
+cowl relay serve                            # turn this wallet into a relayer, earn each spend's fee
+cowl relay quote http://localhost:4663      # ask a relayer its price per spend
+cowl unshield 0.1 --relay http://…:4663     # the relayer submits and pays gas, not you
+cowl send 0.01 ETH zcowl:0x… --relay http://…:4663
+```
+
 ### Private trades
 
 A shielded swap spends a note of one token and mints a note of another, so your size and direction
@@ -256,11 +281,15 @@ install, the prover ships with the CLI — sends it to the pool contract, and th
 chain. Your leaf index comes from the contract, and `balance --shielded`, `portfolio` and `scan`
 rebuild the commitment tree from the pool's event log.
 
-**`unshield`, private `send` and `trade` are not live there yet.** Their circuits have not
-shipped, and simulating a spend on top of a real ledger would corrupt it — a simulated nullifier
-would pin a real on-chain note as spent, and the simulation's output note would vanish on the next
-sync because the chain never saw it. So on pool networks those commands say so and exit instead of
-pretending. Your notes hold value on chain and unlock the moment the spend circuits land.
+**`unshield` and private `send` are real too.** Each is a join-split: one proof spends up to two
+notes and appends exactly two, proven on your machine and verified by the pool before anything
+moves. The chain learns two nullifiers, two opaque commitments, and — only when value actually
+leaves the pool — the public leg. Change comes back as a fresh note only your keys can find, and
+spent notes are marked from the pool's own log, never guessed.
+
+**`trade` is the one simulation left.** Its circuit has not shipped, and simulating a spend on top
+of a real ledger would corrupt it, so on pool networks the command says so and exits instead of
+pretending. Your notes hold value on chain and trade the moment its circuit lands.
 
 On networks with no pool contract, the full flow — shield, send, trade, unshield — runs as a local
 simulation: the cryptography is real and value is conserved, but nothing settles. Point a shared
