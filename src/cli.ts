@@ -63,6 +63,7 @@ import { tokenToField, tokenLabel } from "./shielded/note.js";
 import { shield as poolShield, unshield as poolUnshield, sendPrivate, balance as poolBalance, scan as poolScan, trade as poolTrade } from "./shielded/pool.js";
 import { planSend, planUnshield, loadPool, loadWallet, type Pool, type Wallet, type PlannedSpend } from "./shielded/pool.js";
 import { decompose, groupParts, tiersFor, MAX_BOUNDARY_TXS } from "./shielded/denominations.js";
+import { fetchQuote, relaySpend, type RelayQuote } from "./relayer/client.js";
 import { MARKETS, PROTOCOL_FEE_BPS, QUOTE_SYMBOL, WAD, priceInQuoteWad, quoteTrade, type Side } from "./shielded/market.js";
 
 /** The wordmark needs ~35 columns; fall back to the compact banner when narrow. */
@@ -1315,6 +1316,7 @@ async function spendOnChain(
   build:
     | ((pool: Pool, wallet: Wallet, keys: ShieldedKeys, payout: bigint) => PlannedSpend)
     | ((pool: Pool, wallet: Wallet, keys: ShieldedKeys, payout: bigint) => PlannedSpend)[],
+  relayUrl?: string,
 ): Promise<void> {
   requireWallet();
   const { proveTransfer } = await import("./shielded/prove.js");
@@ -1361,8 +1363,12 @@ async function spendOnChain(
         `0x${string}`,
       ];
 
-      s.message(`${tag}Broadcasting`);
-      const receipt = await submitSpend(net, account, proof.spend, ciphertexts, proof.proof);
+      // A relayed spend goes to the relayer's wallet instead of ours — the
+      // proof already binds its fee and address, so it submits or it reverts.
+      s.message(relayUrl ? `${tag}Relaying` : `${tag}Broadcasting`);
+      const receipt = relayUrl
+        ? await relaySpend(relayUrl, proof.spend, ciphertexts, proof.proof)
+        : await submitSpend(net, account, proof.spend, ciphertexts, proof.proof);
 
       // Past here the spend is on chain; a local hiccup must not read as a failure.
       try {
@@ -1404,7 +1410,8 @@ program
   .argument("<amount>", "amount, e.g. 0.1")
   .argument("[token]", "native symbol (default) or an ERC-20 address")
   .option("--exact", "move the exact amount in one withdrawal instead of shared denominations")
-  .action(async (amount: string, token: string | undefined, opts: { exact?: boolean }) => {
+  .option("--relay <url>", "hand the spend to a relayer — its wallet submits and pays gas, not yours")
+  .action(async (amount: string, token: string | undefined, opts: { exact?: boolean; relay?: string }) => {
     const { net } = ctx();
     const sym = net.currency.symbol;
     if (!(Number(amount) > 0)) die("Amount must be positive.");
@@ -1415,6 +1422,20 @@ program
       const address = requireWallet();
       const label = tokenLabel(tokenField, sym);
       const { parts, dust } = boundaryParts(value, 18, label, Boolean(opts.exact));
+
+      // A relayed withdrawal pays the relayer's fee out of the same shielded
+      // notes, one fee per spend, all bound into each proof before it leaves.
+      let quote: RelayQuote | null = null;
+      if (opts.relay) {
+        if (tokenField !== 0n) die(`Relayed unshields carry the native coin. Withdraw ${sym}, or drop --relay.`);
+        quote = await fetchQuote(opts.relay);
+        if (quote.chainId !== net.chainId) {
+          die(`That relayer serves chain ${quote.chainId}, not ${net.chainId}.`);
+        }
+      }
+
+      const relayerField = quote ? BigInt(quote.relayer) : 0n;
+      const feePerSpend = quote ? quote.feeWei : 0n;
       await spendOnChain(
         net,
         "Unshield",
@@ -1427,11 +1448,23 @@ program
             row("Remainder", muted(`${formatUnits(dust, 18)} ${label} stays shielded — add --exact to include it`));
           }
           row("To", muted(address));
+          if (quote) {
+            row("Relayer", muted(quote.relayer));
+            row(
+              "Fee",
+              muted(
+                parts.length > 1
+                  ? `${formatEther(feePerSpend)} ${sym} × ${parts.length} = ${formatEther(feePerSpend * BigInt(parts.length))} ${sym}, paid from shielded funds`
+                  : `${formatEther(feePerSpend)} ${sym}, paid from shielded funds`,
+              ),
+            );
+          }
         },
         parts.map(
           (part) => (pool: Pool, wallet: Wallet, keys: ShieldedKeys, payout: bigint) =>
-            planUnshield(pool, wallet, keys, part, tokenField, payout, BigInt(net.chainId)),
+            planUnshield(pool, wallet, keys, part, tokenField, payout, BigInt(net.chainId), feePerSpend, relayerField),
         ),
+        opts.relay,
       );
       return;
     }
@@ -1443,6 +1476,76 @@ program
       row("Nullifiers", muted(res.nullifiers.length === 1 ? res.nullifiers[0]! : `${res.nullifiers.length} notes spent`));
       if (res.changeCommitment) row("Change note", muted(res.changeCommitment));
       localNotice(net);
+    } catch (e) {
+      die((e as Error).message);
+    }
+  });
+
+// ---- relay ------------------------------------------------------------------
+
+const relay = program.command("relay").description("run a relayer, or query one");
+
+relay
+  .command("serve")
+  .description("relay other wallets' spends from this one and earn each spend's fee leg")
+  .option("--port <port>", "port to listen on", "4663")
+  .option("--margin <pct>", "percent over raw gas cost", "25")
+  .action(async (opts: { port: string; margin: string }) => {
+    const { net } = ctx();
+    requireWallet();
+    const port = Number(opts.port);
+    const marginPct = Number(opts.margin);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) die("Port must be 1–65535.");
+    if (!Number.isFinite(marginPct) || marginPct < 0) die("Margin must be a non-negative percent.");
+
+    const { poolAddress } = await import("./shielded/contract.js");
+    if (!poolAddress(net)) die(`No shielded pool on ${net.label} — nothing to relay.`);
+
+    // The relayer's wallet signs the submissions and collects the fees.
+    const pass = await askPassphrase();
+    const { unlockKeystore } = await import("./keystore.js");
+    const account = unlockKeystore(pass);
+
+    const { startRelayServer } = await import("./relayer/server.js");
+    const { close } = await startRelayServer(net, account, { port, marginPct }, (e) => {
+      if (e.kind === "quote") console.log(`  ${muted("quoted")} ${bone(`${formatEther(e.feeWei)} ${net.currency.symbol}`)}`);
+      if (e.kind === "relayed") {
+        ok(`Relayed. Earned ${bold(formatEther(e.feeWei))} ${net.currency.symbol} ${muted(`· gas ${e.gasUsed.toLocaleString("en-US")} · ${txLink(net, e.hash)}`)}`);
+      }
+      if (e.kind === "rejected") console.log(`  ${warnMark()} ${muted(e.reason)}`);
+    });
+
+    heading("Relayer");
+    row("Address", bone(account.address));
+    row("Pool", muted(poolAddress(net)!));
+    row("Network", muted(net.label));
+    row("Listening", acid(`http://localhost:${port}`));
+    console.log(`  ${muted("Spenders point")} ${bone(`--relay http://localhost:${port}`)} ${muted("here. Every relayed spend pays this wallet its fee. Ctrl-C stops it.")}`);
+
+    await new Promise<void>((resolve) => {
+      process.on("SIGINT", () => {
+        close();
+        resolve();
+      });
+    });
+    console.log(`\n  ${muted("Relayer stopped.")}`);
+  });
+
+relay
+  .command("quote")
+  .description("ask a relayer what it charges per spend")
+  .argument("<url>", "relayer URL, e.g. http://localhost:4663")
+  .action(async (url: string) => {
+    const { json } = ctx();
+    try {
+      const q = await fetchQuote(url);
+      out(json, { relayer: q.relayer, feeWei: q.feeWei.toString(), chainId: q.chainId, pool: q.pool }, () => {
+        heading("Relayer quote");
+        row("Relayer", bone(q.relayer));
+        row("Fee", `${bold(formatEther(q.feeWei))} ${muted("per spend, paid from shielded funds")}`);
+        row("Chain", muted(String(q.chainId)));
+        row("Pool", muted(q.pool));
+      });
     } catch (e) {
       die((e as Error).message);
     }

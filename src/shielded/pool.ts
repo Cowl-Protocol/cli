@@ -327,7 +327,12 @@ export function planSend(
   };
 }
 
-/** Plan an unshield: `value` leaves to `payout` (your public address as a field), change stays private. */
+/**
+ * Plan an unshield: `value` leaves to `payout` (your public address as a field),
+ * change stays private. A relayed spend adds `fee` on top — paid to `relayer`
+ * out of the same notes, bound into the proof — so the relayer can submit from
+ * its own wallet and the chain never sees yours pay for gas.
+ */
 export function planUnshield(
   pool: Pool,
   wallet: Wallet,
@@ -336,10 +341,12 @@ export function planUnshield(
   token: bigint,
   payout: bigint,
   chainId: bigint,
+  fee: bigint = 0n,
+  relayer: bigint = 0n,
 ): PlannedSpend {
-  const inputs = selectUpTo2(wallet, token, value);
+  const inputs = selectUpTo2(wallet, token, value + fee);
   const total = inputs.reduce((s, n) => s + hexToField(n.value), 0n);
-  const out0: Note = { value: total - value, token, mpk: keys.mpk, blinding: randomField() };
+  const out0: Note = { value: total - value - fee, token, mpk: keys.mpk, blinding: randomField() };
   const out1: Note = { value: 0n, token, mpk: keys.mpk, blinding: randomField() };
   return {
     plan: {
@@ -351,9 +358,9 @@ export function planUnshield(
       leaves: pool.commitments.map(hexToField),
       publicToken: token,
       publicValue: value,
-      fee: 0n,
+      fee,
       recipient: payout,
-      relayer: 0n,
+      relayer,
       chainId,
     },
     outputs: [
