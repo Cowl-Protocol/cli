@@ -298,6 +298,7 @@ export function planSend(
   recipient: PaymentAddress,
   value: bigint,
   token: bigint,
+  chainId: bigint,
 ): PlannedSpend {
   const inputs = selectUpTo2(wallet, token, value);
   const total = inputs.reduce((s, n) => s + hexToField(n.value), 0n);
@@ -316,6 +317,7 @@ export function planSend(
       fee: 0n,
       recipient: 0n,
       relayer: 0n,
+      chainId,
     },
     outputs: [
       { note: out0, viewPubHex: recipient.viewPubHex },
@@ -333,6 +335,7 @@ export function planUnshield(
   value: bigint,
   token: bigint,
   payout: bigint,
+  chainId: bigint,
 ): PlannedSpend {
   const inputs = selectUpTo2(wallet, token, value);
   const total = inputs.reduce((s, n) => s + hexToField(n.value), 0n);
@@ -351,6 +354,7 @@ export function planUnshield(
       fee: 0n,
       recipient: payout,
       relayer: 0n,
+      chainId,
     },
     outputs: [
       { note: out0, viewPubHex: keys.viewPubHex },

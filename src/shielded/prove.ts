@@ -134,6 +134,9 @@ export type SpendPlan = {
   /** Payout targets as address-fields; 0 when that leg is unused. */
   recipient: bigint;
   relayer: bigint;
+  /** The chain this spend is for. Bound into the proof and checked against
+   * block.chainid on chain, so a proof cannot be replayed on another instance. */
+  chainId: bigint;
 };
 
 /** The subset of a proof that ShieldedPool.spend's Spend struct consumes. */
@@ -152,7 +155,7 @@ export type SpendStruct = {
 export type SpendProof = {
   /** UltraHonk proof bytes, passed straight to ShieldedPool.spend(). */
   proof: `0x${string}`;
-  /** All 13 public inputs, in the order spend() rebuilds them — kept for cross-checks. */
+  /** All 14 public inputs, in the order spend() rebuilds them — kept for cross-checks. */
   publicInputs: readonly `0x${string}`[];
   /** Everything spend()'s Spend struct needs, already derived from the same witness. */
   spend: SpendStruct;
@@ -245,6 +248,7 @@ export async function proveTransfer(plan: SpendPlan): Promise<SpendProof> {
     fee: fieldToHex(plan.fee),
     recipient: fieldToHex(plan.recipient),
     relayer: fieldToHex(plan.relayer),
+    chain_id: fieldToHex(plan.chainId),
   };
 
   const [{ UltraHonkBackend, Barretenberg, BackendType }, { Noir }] = await Promise.all([
@@ -264,8 +268,8 @@ export async function proveTransfer(plan: SpendPlan): Promise<SpendProof> {
     const { proof, publicInputs } = await quietly(() =>
       backend.generateProof(witness, { verifierTarget: "evm" }),
     );
-    if (publicInputs.length !== 13) {
-      throw new Error(`expected 13 public inputs, got ${publicInputs.length}`);
+    if (publicInputs.length !== 14) {
+      throw new Error(`expected 14 public inputs, got ${publicInputs.length}`);
     }
     return {
       proof: `0x${Buffer.from(proof).toString("hex")}`,

@@ -408,6 +408,9 @@ contract ShieldedPoolIntegrationTest is Test {
     bytes32[] spendInputs;
 
     function setUp() public {
+        // The transfer fixture is proven for Robinhood testnet (46630), and the
+        // proof binds that chain id, so the pool must see the same block.chainid.
+        vm.chainId(46630);
         pool = new ShieldedPool(
             IVerifier(address(new ShieldVerifier())), IVerifier(address(new TransferVerifier()))
         );
@@ -476,6 +479,17 @@ contract ShieldedPoolIntegrationTest is Test {
         // The whole point of binding recipient into the proof: a mempool
         // observer cannot re-point a pending unshield at themselves.
         s.recipient = address(0xBAD);
+        vm.expectRevert();
+        pool.spend(s, okCiphers(), spendProof);
+    }
+
+    function test_spend_proof_is_bound_to_its_chain() public {
+        _deposit();
+        ShieldedPool.Spend memory s = _spend();
+        // The proof binds chain 46630; on any other chain the pool passes a
+        // different block.chainid, so the same proof no longer verifies. This is
+        // what stops a spend from being replayed on another instance of the pool.
+        vm.chainId(999);
         vm.expectRevert();
         pool.spend(s, okCiphers(), spendProof);
     }

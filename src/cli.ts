@@ -987,7 +987,7 @@ program
             row("To", bone(to.slice(0, 22) + "…"));
             row("Amount", `${bold(amount)} ${muted(tokenLabel(tokenField, sym))}`);
           },
-          (pool, wallet, keys) => planSend(pool, wallet, keys, recipient, value, tokenField),
+          (pool, wallet, keys) => planSend(pool, wallet, keys, recipient, value, tokenField, BigInt(net.chainId)),
         );
         return;
       }
@@ -1316,7 +1316,7 @@ program
           row("Amount", `${bold(amount)} ${muted(tokenLabel(tokenField, sym))}`);
           row("To", muted(address));
         },
-        (pool, wallet, keys, payout) => planUnshield(pool, wallet, keys, value, tokenField, payout),
+        (pool, wallet, keys, payout) => planUnshield(pool, wallet, keys, value, tokenField, payout, BigInt(net.chainId)),
       );
       return;
     }

@@ -238,7 +238,7 @@ contract ShieldedPool {
         nextLeafIndex = insertIndex + 2;
         _advanceRoot(s.newRoot);
 
-        bytes32[] memory publicInputs = new bytes32[](13);
+        bytes32[] memory publicInputs = new bytes32[](14);
         publicInputs[0] = s.membershipRoot;
         publicInputs[1] = s.nullifiers[0];
         publicInputs[2] = s.nullifiers[1];
@@ -252,6 +252,11 @@ contract ShieldedPool {
         publicInputs[10] = bytes32(s.fee);
         publicInputs[11] = bytes32(uint256(uint160(s.recipient)));
         publicInputs[12] = bytes32(uint256(uint160(s.relayer)));
+        // Binds the spend to this chain. The circuit takes chain_id as a public
+        // input and folds it into a hash it must satisfy, so a proof built for a
+        // different chain fails here — the pool never has to trust the caller for
+        // it, block.chainid is not forgeable.
+        publicInputs[13] = bytes32(block.chainid);
         if (!transferVerifier.verify(proof, publicInputs)) revert InvalidProof();
 
         emit Nullified(s.nullifiers[0]);

@@ -76,6 +76,10 @@ fn main(
     fee: pub Field,
     recipient: pub Field,
     relayer: pub Field,
+    // The deployment this spend is for. The contract passes block.chainid, so a
+    // proof built for one chain cannot verify on another even though every
+    // instance shares this verifying key — no cross-instance or fork replay.
+    chain_id: pub Field,
 ) {
     let (nk, mpk) = derive_keys(sk);
 
@@ -135,12 +139,14 @@ fn main(
 
     assert(sum_in == sum_out + public_value + fee, "value is not conserved");
 
-    // Bind the payout addresses into the proof. Without this a pending unshield
-    // is malleable: anyone watching the mempool could resubmit the same proof
-    // with their own address in the calldata. Hashing them is what holds the
-    // wires in the constraint system — a public input the circuit never touches
-    // can be optimised away, and an optimised-away input binds nothing.
-    let payout_tag = Poseidon2::hash([recipient, relayer], 2);
+    // Bind the payout addresses and the chain id into the proof. Without this a
+    // pending unshield is malleable: anyone watching the mempool could resubmit
+    // the same proof with their own address in the calldata, and a proof could
+    // be replayed on another instance of this circuit. Hashing them is what
+    // holds the wires in the constraint system — a public input the circuit
+    // never touches can be optimised away, and an optimised-away input binds
+    // nothing.
+    let payout_tag = Poseidon2::hash([recipient, relayer, chain_id], 3);
     assert(payout_tag != 0);
 }
 
@@ -213,6 +219,7 @@ fn run(c: Case) {
         c.fee,
         0xbeef,
         0xcafe,
+        46630,
     );
 }
 
@@ -307,6 +314,7 @@ fn cannot_spend_a_note_that_is_not_in_the_tree() {
         0,
         0xbeef,
         0xcafe,
+        46630,
     );
 }
 
@@ -348,6 +356,7 @@ fn outputs_must_append_to_the_current_tree() {
         0,
         0xbeef,
         0xcafe,
+        46630,
     );
 }
 
@@ -392,5 +401,6 @@ fn cannot_spend_someone_elses_note() {
         0,
         0xbeef,
         0xcafe,
+        46630,
     );
 }

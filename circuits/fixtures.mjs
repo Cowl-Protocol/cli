@@ -77,6 +77,9 @@ const outs = [change, filler];
 const outCommitments = outs.map(commitment);
 const publicValue = 250n;
 const fee = 50n;
+// The chain the spend is bound to. The contract passes block.chainid, so the
+// integration test sets vm.chainId to this. Robinhood testnet is 46630.
+const CHAIN_ID = 46630n;
 
 // A dummy input's leaf index is unconstrained, so it must land far outside the
 // 0..2^20 range real leaves occupy or it would burn a real note's nullifier.
@@ -110,6 +113,7 @@ const spendInput = {
   fee: fieldToHex(fee),
   recipient: fieldToHex(RECIPIENT),
   relayer: fieldToHex(RELAYER),
+  chain_id: fieldToHex(CHAIN_ID),
 };
 
 // The order ShieldedPool.spend builds its publicInputs array in.
@@ -126,6 +130,7 @@ await proveInto("transfer", spendInput, [
   fieldToHex(fee),
   fieldToHex(RECIPIENT),
   fieldToHex(RELAYER),
+  fieldToHex(CHAIN_ID),
 ]);
 
 console.log("\nfixtures written to circuits/target/{shield,transfer}-fixture/");
