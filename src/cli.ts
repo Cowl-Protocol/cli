@@ -202,7 +202,7 @@ function localNotice(net: NetworkDef, kind: "op" | "view" = "op"): void {
   void kind; // on pool networks the ops run on chain, so this only ever fires view-side
   if (net.contracts.pool) {
     console.log(
-      `\n  ${warnMark()} ${muted("Shielded on")} ${bone(net.label)} ${muted("— deposits, private sends and unshields settle on chain. Private trading stays simulated until its circuit ships.")}`,
+      `\n  ${warnMark()} ${muted("Shielded on")} ${bone(net.label)} ${muted("— deposits, private sends, trades and unshields all settle on chain.")}`,
     );
     return;
   }
@@ -693,15 +693,23 @@ program
       const keys = await shieldedKeys();
       const sync = await syncPoolQuietly(net, json);
       const bal = poolBalance(net.key, keys);
+      // Resolve each token to its real symbol and decimals — a traded ERC-20
+      // shows up as "USDG 0.1", not a hex address at eighteen decimals.
+      const lines = await Promise.all(
+        bal.map(async (b) => {
+          const meta = await shieldedTokenDisplay(net, b.token, sym);
+          return { label: meta.label, amount: formatUnits(b.amount, meta.decimals), notes: b.notes };
+        }),
+      );
       out(json, {
-        shielded: bal.map((b) => ({ token: tokenLabel(b.token, sym), amount: formatEther(b.amount), notes: b.notes })),
+        shielded: lines.map((l) => ({ token: l.label, amount: l.amount, notes: l.notes })),
         ...(sync ? { pool: { leaves: sync.totalLeaves, root: sync.root } } : {}),
       }, () => {
         heading("Shielded balance");
-        if (bal.length === 0) {
+        if (lines.length === 0) {
           console.log(`  ${dim("Empty. Fund it with")} ${dim("cowl shield <amount>")}`);
         } else {
-          for (const b of bal) row(tokenLabel(b.token, sym), `${bold(formatEther(b.amount))} ${muted(`· ${b.notes} note${b.notes === 1 ? "" : "s"}`)}`);
+          for (const l of lines) row(l.label, `${bold(l.amount)} ${muted(`· ${l.notes} note${l.notes === 1 ? "" : "s"}`)}`);
         }
         localNotice(net, "view");
       });
@@ -1127,6 +1135,29 @@ async function resolveBoundaryAmount(
   } catch {
     die(`Can't read that token on ${net.label}.`, `Is ${addr} an ERC-20 on this network?`);
   }
+}
+
+/**
+ * How a shielded token renders: the native symbol, a sim market symbol, or a
+ * real ERC-20's own symbol and decimals read from its contract.
+ */
+async function shieldedTokenDisplay(
+  net: NetworkDef,
+  token: bigint,
+  sym: string,
+): Promise<{ label: string; decimals: number }> {
+  if (token === 0n) return { label: sym, decimals: 18 };
+  const label = tokenLabel(token, sym);
+  if (!label.startsWith("0x")) return { label, decimals: 18 }; // sim market token
+  if (token < 1n << 160n && net.contracts.pool) {
+    try {
+      const meta = await tokenMeta(net, `0x${token.toString(16).padStart(40, "0")}` as Address);
+      return { label: meta.symbol, decimals: meta.decimals };
+    } catch {
+      // The RPC is down — fall back to the raw form rather than fail the read.
+    }
+  }
+  return { label, decimals: 18 };
 }
 
 /**
@@ -1818,10 +1849,16 @@ program
     let shieldedRows: PortfolioRow[] = [];
     if (showShielded && keys) {
       await syncPoolQuietly(net, json);
-      shieldedRows = poolBalance(net.key, keys).map((b) => {
-        const symbol = tokenLabel(b.token, sym);
-        return { symbol, amount: b.amount, value: valueOf(symbol, b.amount), notes: b.notes };
-      });
+      shieldedRows = await Promise.all(
+        poolBalance(net.key, keys).map(async (b) => {
+          const meta = await shieldedTokenDisplay(net, b.token, sym);
+          // The portfolio prices and prints everything at 18 decimals, so a
+          // 6-decimal token's units scale up to that before valuation.
+          const amountWad =
+            meta.decimals < 18 ? b.amount * 10n ** BigInt(18 - meta.decimals) : b.amount;
+          return { symbol: meta.label, amount: amountWad, value: valueOf(meta.label, amountWad), notes: b.notes };
+        }),
+      );
     }
 
     if (json) {
