@@ -41,11 +41,13 @@ export const NETWORKS: Record<string, NetworkDef> = {
     explorer: "https://explorer.testnet.chain.robinhood.com",
     currency: { name: "Ether", symbol: "ETH", decimals: 18 },
     testnet: true,
-    // Redeployed 2026-07-22 with the NoteCipher event and the join-split spend
-    // surface. The pool holds its two verifiers as immutables (ShieldVerifier
-    // 0xB75c5659…0ba9, TransferVerifier 0x349B4c13…cE75), so only the pool address
-    // and its deploy block live here; redeploy all three if a circuit ever changes.
-    contracts: { pool: "0x3c60dB74dBEd90c960F6ce54C1b0c8ae84Ccca2C", poolDeployBlock: 92335340n },
+    // Redeployed 2026-07-23 with the TIER-1 freeze hardening: domain-separated
+    // note hashes, a per-token value-conservation cap, chain-id binding on spends,
+    // and a timelocked verifier-swap owner. ShieldVerifier 0xB75c5659…0ba9 is
+    // reused (its circuit is unchanged); TransferVerifier 0xBA945Bf3…4239 is new.
+    // Only the pool address and its deploy block live here; redeploy the pool and
+    // the transfer verifier if the transfer circuit changes again.
+    contracts: { pool: "0xf9F825f2D6d8509c78baaa587694f74672C32A59", poolDeployBlock: 92522685n },
   },
   "robinhood-mainnet": {
     key: "robinhood-mainnet",
