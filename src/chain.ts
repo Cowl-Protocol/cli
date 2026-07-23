@@ -1,6 +1,7 @@
 import {
   createPublicClient,
   createWalletClient,
+  fallback,
   http,
   formatEther,
   formatUnits,
@@ -16,20 +17,28 @@ import { toViemChain, type NetworkDef } from "./networks.js";
 // portfolio read stretches into tens of seconds.
 const TRANSPORT_BATCH = { batch: { wait: 16 } } as const;
 
+/** The network's transport: its RPC, failing over to the fallback when one is
+ * declared and the primary stops answering. */
+function transportFor(net: NetworkDef) {
+  const primary = http(net.rpcUrl, TRANSPORT_BATCH);
+  if (!net.rpcFallback) return primary;
+  return fallback([primary, http(net.rpcFallback, TRANSPORT_BATCH)]);
+}
+
 export function publicClient(net: NetworkDef): PublicClient {
   if (!net.rpcUrl) {
     throw new Error(
       `No RPC URL for "${net.key}". Set one: cowl config set rpcUrl <url>`,
     );
   }
-  return createPublicClient({ chain: toViemChain(net), transport: http(net.rpcUrl, TRANSPORT_BATCH) });
+  return createPublicClient({ chain: toViemChain(net), transport: transportFor(net) });
 }
 
 export function walletClient(net: NetworkDef, account: PrivateKeyAccount): WalletClient {
   if (!net.rpcUrl) {
     throw new Error(`No RPC URL for "${net.key}". Set one: cowl config set rpcUrl <url>`);
   }
-  return createWalletClient({ account, chain: toViemChain(net), transport: http(net.rpcUrl, TRANSPORT_BATCH) });
+  return createWalletClient({ account, chain: toViemChain(net), transport: transportFor(net) });
 }
 
 // Minimal ERC-20 ABI (reads + transfer).

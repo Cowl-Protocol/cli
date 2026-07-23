@@ -3,6 +3,11 @@ import type { Chain } from "viem";
 export type CowlContracts = {
   /** Shielded pool contract — deposits, private trades, withdrawals. */
   pool?: `0x${string}`;
+  /** Trade venue (V3-interface router + quoter) and its tokens, where deployed. */
+  weth?: `0x${string}`;
+  usdg?: `0x${string}`;
+  swapRouter?: `0x${string}`;
+  quoter?: `0x${string}`;
   /**
    * Block the pool was deployed in. Commitments live in the event log rather than
    * contract storage, so rebuilding the tree means replaying NoteCommitted — and
@@ -20,6 +25,8 @@ export type NetworkDef = {
   label: string;
   chainId: number;
   rpcUrl: string;
+  /** Tried when the primary RPC stops answering — public endpoints do. */
+  rpcFallback?: string;
   explorer: string;
   currency: { name: string; symbol: string; decimals: number };
   testnet: boolean;
@@ -47,13 +54,24 @@ export const NETWORKS: Record<string, NetworkDef> = {
     // reused (its circuit is unchanged); TransferVerifier 0xBA945Bf3…4239 is new.
     // Only the pool address and its deploy block live here; redeploy the pool and
     // the transfer verifier if the transfer circuit changes again.
-    contracts: { pool: "0xf9F825f2D6d8509c78baaa587694f74672C32A59", poolDeployBlock: 92522685n },
+    contracts: {
+      pool: "0xf9F825f2D6d8509c78baaa587694f74672C32A59",
+      poolDeployBlock: 92522685n,
+      // The testnet trade venue (V3-interface stand-ins), deployed 2026-07-23.
+      weth: "0xdC155cafBa4D26790781c12e4B1001F933496Da2",
+      usdg: "0xa82762eDA1AF5Ed19B9BD544C121dbcF365526aC",
+      swapRouter: "0xbd610c3A708C483a64dC2C92876C2D1a8Ef43b03",
+      quoter: "0x5cD1F037A2CB277A7661Ad6c045803BFC428f84B",
+    },
   },
   "robinhood-mainnet": {
     key: "robinhood-mainnet",
     label: "Robinhood Chain",
     chainId: 4663,
     rpcUrl: "https://rpc.mainnet.chain.robinhood.com",
+    // The official RPC has gone quiet before (observed 2026-07-23); the
+    // explorer's JSON-RPC answered throughout, so reads fail over to it.
+    rpcFallback: "https://robinhoodchain.blockscout.com/api/eth-rpc",
     explorer: "https://robinhoodchain.blockscout.com",
     currency: { name: "Ether", symbol: "ETH", decimals: 18 },
     testnet: false,
