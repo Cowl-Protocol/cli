@@ -1542,7 +1542,7 @@ relay
       out(json, { relayer: q.relayer, feeWei: q.feeWei.toString(), chainId: q.chainId, pool: q.pool }, () => {
         heading("Relayer quote");
         row("Relayer", bone(q.relayer));
-        row("Fee", `${bold(formatEther(q.feeWei))} ${muted("per spend, paid from shielded funds")}`);
+        row("Fee", `${bold(formatEther(q.feeWei))} ${muted("ETH per spend, paid from shielded funds")}`);
         row("Chain", muted(String(q.chainId)));
         row("Pool", muted(q.pool));
       });
