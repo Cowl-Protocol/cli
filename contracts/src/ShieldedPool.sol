@@ -74,8 +74,32 @@ contract ShieldedPool {
     /// The pool never looks inside; the width is all it checks.
     uint256 public constant NOTE_CIPHER_LEN = 158;
 
-    IVerifier public immutable shieldVerifier;
-    IVerifier public immutable transferVerifier;
+    /// Held in storage rather than as immutables so a proven-broken verifier can
+    /// be replaced without stranding the pool. The swap is timelocked (see
+    /// below), and the owner can renounce to make these immutable in practice.
+    IVerifier public shieldVerifier;
+    IVerifier public transferVerifier;
+
+    enum VerifierKind {
+        Shield,
+        Transfer
+    }
+
+    struct PendingSwap {
+        IVerifier verifier;
+        uint64 executeAfter; // 0 = no swap pending for this kind
+    }
+
+    /// A proposed verifier swap must age this long before it can be executed, so
+    /// depositors have a window to exit ahead of a swap they distrust. A constant,
+    /// not a setting: it can never be shortened.
+    uint256 public constant VERIFIER_SWAP_DELAY = 7 days;
+
+    /// Can propose/execute verifier swaps and transfer or renounce ownership.
+    /// Renouncing (owner = address(0)) freezes the verifiers for good.
+    address public owner;
+
+    mapping(VerifierKind => PendingSwap) public pendingSwap;
 
     bytes32 public root;
     uint32 public nextLeafIndex;
@@ -122,12 +146,78 @@ contract ShieldedPool {
     error NoRecipient();
     error BadCipherLength();
     error ExceedsPooledValue();
+    error NotOwner();
+    error NoPendingSwap();
+    error SwapNotReady();
+    error ZeroAddress();
+
+    event VerifierSwapProposed(VerifierKind indexed kind, address verifier, uint256 executeAfter);
+    event VerifierSwapExecuted(VerifierKind indexed kind, address verifier);
+    event VerifierSwapCancelled(VerifierKind indexed kind);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert NotOwner();
+        _;
+    }
 
     constructor(IVerifier _shieldVerifier, IVerifier _transferVerifier) {
         shieldVerifier = _shieldVerifier;
         transferVerifier = _transferVerifier;
+        owner = msg.sender;
+        emit OwnershipTransferred(address(0), msg.sender);
         root = EMPTY_ROOT;
         _rememberRoot(EMPTY_ROOT);
+    }
+
+    // -------------------------------------------------------- governance ---
+    //
+    // The verifier-swap escape hatch. An immutable EVM pool cannot patch a
+    // circuit soundness bug the way an L1 network upgrade can, so the owner may
+    // replace a verifier — but only after VERIFIER_SWAP_DELAY, giving anyone who
+    // distrusts the swap time to withdraw first. Renouncing ownership makes the
+    // verifiers immutable in practice, the intended long-run state.
+
+    /// Queue a verifier replacement. It cannot take effect until the delay has
+    /// elapsed; a later proposal for the same kind overwrites the earlier one.
+    function proposeVerifierSwap(VerifierKind kind, IVerifier verifier) external onlyOwner {
+        if (address(verifier) == address(0)) revert ZeroAddress();
+        uint64 executeAfter = uint64(block.timestamp + VERIFIER_SWAP_DELAY);
+        pendingSwap[kind] = PendingSwap(verifier, executeAfter);
+        emit VerifierSwapProposed(kind, address(verifier), executeAfter);
+    }
+
+    /// Apply a queued swap once its delay has passed.
+    function executeVerifierSwap(VerifierKind kind) external onlyOwner {
+        PendingSwap memory p = pendingSwap[kind];
+        if (p.executeAfter == 0) revert NoPendingSwap();
+        if (block.timestamp < p.executeAfter) revert SwapNotReady();
+        if (kind == VerifierKind.Shield) {
+            shieldVerifier = p.verifier;
+        } else {
+            transferVerifier = p.verifier;
+        }
+        delete pendingSwap[kind];
+        emit VerifierSwapExecuted(kind, address(p.verifier));
+    }
+
+    /// Drop a queued swap before it executes.
+    function cancelVerifierSwap(VerifierKind kind) external onlyOwner {
+        if (pendingSwap[kind].executeAfter == 0) revert NoPendingSwap();
+        delete pendingSwap[kind];
+        emit VerifierSwapCancelled(kind);
+    }
+
+    function transferOwnership(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) revert ZeroAddress();
+        emit OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
+    }
+
+    /// Give up the escape hatch. After this the verifiers can never change.
+    function renounceOwnership() external onlyOwner {
+        emit OwnershipTransferred(owner, address(0));
+        owner = address(0);
     }
 
     /// Deposit `value` of `token` under a note commitment, appending it at

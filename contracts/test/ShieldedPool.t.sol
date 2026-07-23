@@ -521,3 +521,113 @@ contract ShieldedPoolIntegrationTest is Test {
         pool.shield{value: 1000}(0, 1000, shieldInputs[2], shieldInputs[4], okCipher(), garbage);
     }
 }
+
+/// The verifier-swap escape hatch. An immutable pool holding its verifiers as
+/// constructor immutables could never fix a circuit soundness bug; this lets the
+/// owner replace a verifier, but only through a timelock so depositors get a
+/// window to exit a swap they distrust — and the owner can renounce to freeze
+/// the verifiers forever once confident. The turnstile still bounds the damage a
+/// malicious verifier could do in the meantime.
+contract ShieldedPoolGovernanceTest is Test {
+    MockVerifier shieldVerifier;
+    MockVerifier transferVerifier;
+    ShieldedPool pool;
+
+    function setUp() public {
+        shieldVerifier = new MockVerifier();
+        transferVerifier = new MockVerifier();
+        pool = new ShieldedPool(
+            IVerifier(address(shieldVerifier)), IVerifier(address(transferVerifier))
+        );
+    }
+
+    function test_deployer_is_the_owner() public view {
+        assertEq(pool.owner(), address(this));
+    }
+
+    function test_non_owner_cannot_propose_a_swap() public {
+        MockVerifier next = new MockVerifier();
+        vm.prank(address(0xBAD));
+        vm.expectRevert(ShieldedPool.NotOwner.selector);
+        pool.proposeVerifierSwap(ShieldedPool.VerifierKind.Transfer, IVerifier(address(next)));
+    }
+
+    function test_swap_cannot_target_the_zero_address() public {
+        vm.expectRevert(ShieldedPool.ZeroAddress.selector);
+        pool.proposeVerifierSwap(ShieldedPool.VerifierKind.Transfer, IVerifier(address(0)));
+    }
+
+    function test_execute_needs_a_proposal() public {
+        vm.expectRevert(ShieldedPool.NoPendingSwap.selector);
+        pool.executeVerifierSwap(ShieldedPool.VerifierKind.Transfer);
+    }
+
+    function test_swap_waits_out_the_timelock() public {
+        MockVerifier next = new MockVerifier();
+        pool.proposeVerifierSwap(ShieldedPool.VerifierKind.Transfer, IVerifier(address(next)));
+
+        // Too early: the delay has not elapsed.
+        vm.expectRevert(ShieldedPool.SwapNotReady.selector);
+        pool.executeVerifierSwap(ShieldedPool.VerifierKind.Transfer);
+
+        vm.warp(block.timestamp + pool.VERIFIER_SWAP_DELAY());
+        pool.executeVerifierSwap(ShieldedPool.VerifierKind.Transfer);
+        assertEq(address(pool.transferVerifier()), address(next));
+
+        // The pending slot is cleared once executed.
+        (IVerifier v, uint64 t) = pool.pendingSwap(ShieldedPool.VerifierKind.Transfer);
+        assertEq(address(v), address(0));
+        assertEq(t, 0);
+    }
+
+    /// After a swap the pool actually calls the new verifier: a rejecting one
+    /// makes a deposit that used to pass now revert.
+    function test_swap_rewires_the_pool() public {
+        MockVerifier next = new MockVerifier();
+        next.set(false); // rejects every proof
+        pool.proposeVerifierSwap(ShieldedPool.VerifierKind.Shield, IVerifier(address(next)));
+        vm.warp(block.timestamp + pool.VERIFIER_SWAP_DELAY());
+        pool.executeVerifierSwap(ShieldedPool.VerifierKind.Shield);
+
+        vm.expectRevert(ShieldedPool.InvalidProof.selector);
+        pool.shield{value: 1}(0, 1, bytes32(uint256(1)), bytes32(uint256(2)), okCipher(), "");
+    }
+
+    function test_owner_can_cancel_a_pending_swap() public {
+        MockVerifier next = new MockVerifier();
+        pool.proposeVerifierSwap(ShieldedPool.VerifierKind.Transfer, IVerifier(address(next)));
+        pool.cancelVerifierSwap(ShieldedPool.VerifierKind.Transfer);
+
+        (IVerifier v, uint64 t) = pool.pendingSwap(ShieldedPool.VerifierKind.Transfer);
+        assertEq(address(v), address(0));
+        assertEq(t, 0);
+
+        vm.warp(block.timestamp + pool.VERIFIER_SWAP_DELAY());
+        vm.expectRevert(ShieldedPool.NoPendingSwap.selector);
+        pool.executeVerifierSwap(ShieldedPool.VerifierKind.Transfer);
+    }
+
+    function test_ownership_transfers_and_the_old_owner_loses_rights() public {
+        pool.transferOwnership(address(0xA11CE));
+        assertEq(pool.owner(), address(0xA11CE));
+
+        MockVerifier next = new MockVerifier();
+        vm.expectRevert(ShieldedPool.NotOwner.selector);
+        pool.proposeVerifierSwap(ShieldedPool.VerifierKind.Transfer, IVerifier(address(next)));
+    }
+
+    function test_transfer_ownership_rejects_zero() public {
+        vm.expectRevert(ShieldedPool.ZeroAddress.selector);
+        pool.transferOwnership(address(0));
+    }
+
+    /// Renouncing freezes the verifiers forever — the immutable end state.
+    function test_renounce_freezes_the_verifiers() public {
+        pool.renounceOwnership();
+        assertEq(pool.owner(), address(0));
+
+        MockVerifier next = new MockVerifier();
+        vm.expectRevert(ShieldedPool.NotOwner.selector);
+        pool.proposeVerifierSwap(ShieldedPool.VerifierKind.Transfer, IVerifier(address(next)));
+    }
+}
