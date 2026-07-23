@@ -404,3 +404,93 @@ fn cannot_spend_someone_elses_note() {
         46630,
     );
 }
+
+// ---------------------------------------------------------------------------
+// Two real inputs.
+//
+// Every case above spends one real note padded with a zero-value dummy, so the
+// two-in arity — both inputs proven under the root, both nullified, conservation
+// over their sum — never actually runs. These do: two notes at leaves 0 and 1
+// consolidated into two outputs at leaves 2 and 3.
+// ---------------------------------------------------------------------------
+
+/// Two funded notes owned by `sk`, spent together into two private outputs.
+struct Case2 {
+    sk: Field,
+    in_value: [Field; N_IN],
+    out_value: [Field; N_OUT],
+}
+
+fn run2(c: Case2) {
+    let (nk, mpk) = derive_keys(c.sk);
+    let token = 0;
+    let zeros = notes::zeros_path();
+    let flat = [false; TREE_DEPTH];
+
+    let in0 = commit(mpk, token, c.in_value[0], 101);
+    let in1 = commit(mpk, token, c.in_value[1], 102);
+
+    // membership_root = the tree holding both inputs. in1 appends onto the tree
+    // that already holds in0, exactly as the chain grew it.
+    let (path_app1, right_app1) = append_path_1(in0);
+    let (_, membership_root, _) = insert(in1, path_app1, right_app1);
+
+    // Membership paths against that root. in0 sits at leaf 0 (left everywhere,
+    // sibling in1 at level 0); in1 at leaf 1 (right child at level 0, sibling in0).
+    let mut path_in0 = zeros;
+    path_in0[0] = in1;
+    let mut path_in1 = zeros;
+    path_in1[0] = in0;
+    let mut right_in1 = flat;
+    right_in1[0] = true;
+
+    // Outputs append at leaves 2 and 3 of that same tree.
+    let out0 = commit(mpk, token, c.out_value[0], 201);
+    let out1 = commit(0x777, token, c.out_value[1], 202);
+    let (path_out0, right_out0) = append_path_2(in0, in1);
+    let (_, _, _) = insert(out0, path_out0, right_out0);
+    let mut path_out1 = zeros;
+    path_out1[0] = out0;
+    path_out1[1] = Poseidon2::hash([in0, in1], 2);
+    let mut right_out1 = flat;
+    right_out1[0] = true;
+    right_out1[1] = true;
+    let (_, new_root, _) = insert(out1, path_out1, right_out1);
+
+    main(
+        c.sk,
+        token,
+        c.in_value,
+        [101, 102],
+        [0, 1],
+        [path_in0, path_in1],
+        [flat, right_in1],
+        [mpk, 0x777],
+        c.out_value,
+        [201, 202],
+        [path_out0, path_out1],
+        [right_out0, right_out1],
+        membership_root,
+        [nullify(nk, 0), nullify(nk, 1)],
+        [out0, out1],
+        membership_root,
+        new_root,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0,
+        46630,
+    );
+}
+
+#[test]
+fn two_real_inputs_consolidate_and_conserve() {
+    run2(Case2 { sk: 9, in_value: [60, 40], out_value: [70, 30] });
+}
+
+#[test(should_fail_with = "value is not conserved")]
+fn two_real_inputs_cannot_mint() {
+    run2(Case2 { sk: 9, in_value: [60, 40], out_value: [70, 31] });
+}
