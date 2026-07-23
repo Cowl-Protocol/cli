@@ -25,7 +25,7 @@
 // `cowl --version` — pay to load the proving stack. Dynamic import of an external
 // survives bundling untouched, so only a real proof loads the WASM.
 import { SHIELD_CIRCUIT, TRANSFER_CIRCUIT } from "./circuit.js";
-import { fieldToHex, poseidon, randomField } from "./field.js";
+import { fieldToHex, randomField } from "./field.js";
 import { commitment, nullifier, type Note } from "./note.js";
 import { appendProof, computeRoot, merkleProof } from "./tree.js";
 
@@ -209,7 +209,7 @@ export async function proveTransfer(plan: SpendPlan): Promise<SpendProof> {
       inLeafIndex.push(dummyIndex);
       inPath.push(shape.pathElements);
       inRight.push(shape.pathIndices.map((b) => b === 1));
-      nullifiers.push(poseidon([plan.nk, dummyIndex]));
+      nullifiers.push(nullifier(plan.nk, dummyIndex));
     }
   }
 

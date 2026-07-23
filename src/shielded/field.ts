@@ -13,6 +13,15 @@ import { poseidon2Hash } from "@zkpassport/poseidon2";
 /** BN254 scalar field modulus. */
 export const FR = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
+/**
+ * Domain tags for the two two-field hashes — mpk-derivation and nullification —
+ * that would otherwise share the Merkle-node shape. Prepended so each has a
+ * unique (tag, arity) and no digest is valid in another role. ASCII "cowl:mpk"
+ * and "cowl:nul"; mirrored in circuits/notes/src/lib.nr.
+ */
+export const DOMAIN_MPK = 0x636f776c3a6d706bn;
+export const DOMAIN_NULLIFIER = 0x636f776c3a6e756cn;
+
 export function mod(x: bigint): bigint {
   const r = x % FR;
   return r < 0n ? r + FR : r;

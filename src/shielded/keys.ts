@@ -2,15 +2,15 @@
 // so the whole shielded balance is recoverable from one seed.
 //
 //   spendingKey  sk   secret field element — authorizes spends
-//   nullifyingKey nk  = Poseidon(sk)        — seeds nullifiers (unlinkable)
-//   masterPubKey mpk  = Poseidon(sk, nk)    — the note owner id ("npk")
+//   nullifyingKey nk  = Poseidon(sk)                — seeds nullifiers (unlinkable)
+//   masterPubKey mpk  = Poseidon(DOMAIN_MPK, sk, nk) — the note owner id ("npk")
 //
 // A separate secp256k1 view key (shared with the stealth module) encrypts notes to
 // a recipient and lets them scan the pool for what is theirs.
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3";
 import { bytesToHex, hexToBytes, concatBytes } from "@noble/hashes/utils";
-import { hashToField, poseidon, fieldToHex, hexToField } from "./field.js";
+import { hashToField, poseidon, fieldToHex, hexToField, DOMAIN_MPK } from "./field.js";
 
 const Point = secp256k1.ProjectivePoint;
 const CURVE_N = secp256k1.CURVE.n;
@@ -36,7 +36,7 @@ export function deriveShieldedKeys(privateKeyHex: string): ShieldedKeys {
   const pk = hexToBytes(privateKeyHex.replace(/^0x/, ""));
   const sk = hashToField(pk, utf8("cowl:shielded:spend"));
   const nk = poseidon([sk]);
-  const mpk = poseidon([sk, nk]);
+  const mpk = poseidon([DOMAIN_MPK, sk, nk]);
 
   // A view key of its own, under a separate domain. Sharing the stealth view key
   // would make a published stealth meta-address and a published payment address

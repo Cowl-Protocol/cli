@@ -18,11 +18,22 @@ pub global TREE_DEPTH: u32 = 20;
 /// redoing that arithmetic per circuit reopens the hole.
 pub global VALUE_BITS: u32 = 128;
 
-/// nk = Poseidon2(sk), mpk = Poseidon2(sk, nk). Derived rather than passed in,
-/// so holding sk is the only way to spend a note owned by mpk.
+/// Domain tags. mpk-derivation and nullification are otherwise both two-field
+/// Poseidon2 hashes — the same shape as a Merkle node — so a digest computed in
+/// one role could be a valid digest in another. Prepending a distinct constant
+/// gives each a unique (tag, arity) and removes that overlap. The Merkle node
+/// hash keeps the plain two-field form on purpose, so the empty-tree root is
+/// unchanged; nk (one field) and the commitment (four fields) already sit at
+/// unique arities and need no tag. Values are ASCII "cowl:mpk" / "cowl:nul" and
+/// are mirrored in cli/src/shielded/field.ts.
+pub global DOMAIN_MPK: Field = 0x636f776c3a6d706b;
+pub global DOMAIN_NULLIFIER: Field = 0x636f776c3a6e756c;
+
+/// nk = Poseidon2(sk), mpk = Poseidon2(DOMAIN_MPK, sk, nk). Derived rather than
+/// passed in, so holding sk is the only way to spend a note owned by mpk.
 pub fn derive_keys(sk: Field) -> (Field, Field) {
     let nk = Poseidon2::hash([sk], 1);
-    let mpk = Poseidon2::hash([sk, nk], 2);
+    let mpk = Poseidon2::hash([DOMAIN_MPK, sk, nk], 3);
     (nk, mpk)
 }
 
@@ -31,7 +42,7 @@ pub fn commit(mpk: Field, token: Field, value: Field, blinding: Field) -> Field 
 }
 
 pub fn nullify(nk: Field, leaf_index: Field) -> Field {
-    Poseidon2::hash([nk, leaf_index], 2)
+    Poseidon2::hash([DOMAIN_NULLIFIER, nk, leaf_index], 3)
 }
 
 /// Hash `leaf` up through `path` and return the root it reaches, plus the leaf

@@ -1,7 +1,7 @@
 // A shielded note is a private UTXO: a hidden amount of one token owned by one
 // master public key. Its commitment goes into the on-chain Merkle tree; spending
 // it later reveals only a nullifier, never the note itself.
-import { poseidon, randomField } from "./field.js";
+import { poseidon, randomField, DOMAIN_NULLIFIER } from "./field.js";
 import { TOKENS_BY_SYMBOL, TOKENS_BY_FIELD } from "./tokens.js";
 
 export type Note = {
@@ -36,7 +36,7 @@ export function commitment(n: Note): bigint {
   return poseidon([n.mpk, n.token, n.value, n.blinding]);
 }
 
-/** nullifier = Poseidon(nullifyingKey, leafIndex) — unlinkable to the commitment. */
-export function nullifier(nk: bigint, leafIndex: number): bigint {
-  return poseidon([nk, BigInt(leafIndex)]);
+/** nullifier = Poseidon(DOMAIN_NULLIFIER, nullifyingKey, leafIndex) — unlinkable to the commitment. */
+export function nullifier(nk: bigint, leafIndex: number | bigint): bigint {
+  return poseidon([DOMAIN_NULLIFIER, nk, BigInt(leafIndex)]);
 }
