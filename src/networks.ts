@@ -11,6 +11,12 @@ export type CowlContracts = {
   /** The atomic private-trade adapter (unshield → swap → re-shield). */
   tradeAdapter?: `0x${string}`;
   /**
+   * The venue's V3 fee tier for WETH↔USDG routing and gas-in-token quotes.
+   * Defaults to 3000 (the testnet venue's fixed pool); mainnet's deepest
+   * WETH/USDG pool sits at the 500 (0.05%) tier.
+   */
+  feeTier?: number;
+  /**
    * Block the pool was deployed in. Commitments live in the event log rather than
    * contract storage, so rebuilding the tree means replaying NoteCommitted — and
    * without a floor that replay starts at genesis, which public RPCs refuse.
@@ -91,11 +97,19 @@ export const NETWORKS: Record<string, NetworkDef> = {
     // Mainnet shielded pool, deployed 2026-07-24 with the TIER-1 hardening
     // (fresh verifiers; chain-id 4663 is bound into every spend proof).
     // ShieldVerifier 0x0D6E2e89…065fC · TransferVerifier 0x18670646…1275E.
-    // Trade venue (pons) + adapter land here once the router is verified classic
-    // SwapRouter (the adapter's exactOutputSingle passes a deadline field).
+    // The venue is the live pons Uniswap V3 stack — its router is a
+    // SwapRouter02 (no deadline in the params struct), so the adapter was
+    // deployed with router02=true. USDG is the real 6-decimal Global Dollar;
+    // the deepest WETH/USDG pool sits at the 0.05% tier (1.1k WETH deep).
     contracts: {
       pool: "0x6f98666e9d05431dCd765AAa289a5E346AfA6a3E",
       poolDeployBlock: 18121312n,
+      weth: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
+      usdg: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+      swapRouter: "0xCaf681a66D020601342297493863E78C959E5cb2",
+      quoter: "0x33e885eD0Ec9bF04EcfB19341582aADCb4c8A9E7",
+      tradeAdapter: "0x0b86f9d1D2E0Abc8ab7C7BE39498855E8F4a3A98",
+      feeTier: 500,
     },
   },
   "arbitrum-sepolia": {

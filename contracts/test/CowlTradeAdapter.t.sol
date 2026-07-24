@@ -6,7 +6,7 @@ import {ShieldedPool} from "../src/ShieldedPool.sol";
 import {IVerifier, ShieldVerifier} from "../src/ShieldVerifier.sol";
 import {TransferVerifier} from "../src/TransferVerifier.sol";
 import {CowlTradeAdapter} from "../src/CowlTradeAdapter.sol";
-import {TestWETH, TestUSDG, TestSwapRouter} from "../src/TestVenue.sol";
+import {TestWETH, TestUSDG, TestSwapRouter, TestSwapRouter02} from "../src/TestVenue.sol";
 
 /// The real thing, end to end: bb's own proofs drive an atomic private trade —
 /// unshield to the adapter, swap on the venue, shield the output back — against
@@ -71,7 +71,7 @@ contract CowlTradeAdapterTest is Test {
         router = new TestSwapRouter(address(weth), usdgAddr, RATE);
         usdg.mint(address(router), 1_000_000_000000);
 
-        CowlTradeAdapter template = new CowlTradeAdapter(pool, address(router), address(weth));
+        CowlTradeAdapter template = new CowlTradeAdapter(pool, address(router), address(weth), false);
         vm.etch(adapterAddr, address(template).code);
         adapter = CowlTradeAdapter(payable(adapterAddr));
     }
@@ -132,6 +132,28 @@ contract CowlTradeAdapterTest is Test {
         assertEq(address(adapter).balance, 0);
         assertEq(weth.balanceOf(address(adapter)), 0);
         assertEq(usdg.balanceOf(address(adapter)), 0);
+    }
+
+    /// The same trade through a SwapRouter02-style venue — no deadline in the
+    /// params, different selector, same proofs. This is the mainnet (pons)
+    /// dialect; the test double exposes ONLY the 02 entrypoint, so a classic
+    /// encoding would fail here the way it fails on the real router.
+    function test_private_trade_end_to_end_router02() public {
+        TestSwapRouter02 router02 = new TestSwapRouter02(address(weth), address(usdg), RATE);
+        usdg.mint(address(router02), 1_000_000_000000);
+        CowlTradeAdapter template = new CowlTradeAdapter(pool, address(router02), address(weth), true);
+        vm.etch(address(adapter), address(template).code);
+
+        _deposit();
+        adapter.trade(_params());
+
+        assertTrue(pool.nullifierSpent(spendInputs[1]));
+        assertEq(pool.root(), shieldInputs[4]);
+        assertEq(weth.balanceOf(address(router02)), 300);
+        assertEq(usdg.balanceOf(address(pool)), 900);
+        assertEq(pool.pooledValue(uint256(shieldInputs[0])), 900);
+        assertEq(address(adapter).balance, 0);
+        assertEq(weth.balanceOf(address(adapter)), 0);
     }
 
     /// The money property: break anything and the trade never happened. A

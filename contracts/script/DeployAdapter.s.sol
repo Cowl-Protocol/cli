@@ -12,21 +12,25 @@ import {CowlTradeAdapter} from "../src/CowlTradeAdapter.sol";
 ///     --account cowl-deployer --broadcast
 ///
 /// Defaults point at the current testnet pool and venue; override with POOL,
-/// ROUTER, WETH env vars for another deployment. Put the printed address into
+/// ROUTER, WETH env vars for another deployment. Set ROUTER02=true when the
+/// venue is a SwapRouter02 (pons on mainnet dropped `deadline` from the params
+/// struct, which moves the selector). Put the printed address into
 /// cli/src/networks.ts as `tradeAdapter`.
 contract DeployAdapter is Script {
     function run() external {
         address pool = vm.envOr("POOL", address(0xf9F825f2D6d8509c78baaa587694f74672C32A59));
         address router = vm.envOr("ROUTER", address(0xbd610c3A708C483a64dC2C92876C2D1a8Ef43b03));
         address weth = vm.envOr("WETH", address(0xdC155cafBa4D26790781c12e4B1001F933496Da2));
+        bool router02 = vm.envOr("ROUTER02", false);
 
         vm.startBroadcast();
-        CowlTradeAdapter adapter = new CowlTradeAdapter(ShieldedPool(payable(pool)), router, weth);
+        CowlTradeAdapter adapter = new CowlTradeAdapter(ShieldedPool(payable(pool)), router, weth, router02);
         vm.stopBroadcast();
 
         console.log("CowlTradeAdapter:", address(adapter));
         console.log("pool:            ", pool);
         console.log("router:          ", router);
         console.log("weth:            ", weth);
+        console.log("router02:        ", router02);
     }
 }

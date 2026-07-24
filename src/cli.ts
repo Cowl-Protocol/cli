@@ -2266,7 +2266,7 @@ async function tradeOnChain(
       spendProof: spendProof.proof,
       tokenOut: tokenOutField,
       amountOut,
-      poolFee: 3000,
+      poolFee: net.contracts.feeTier ?? 3000,
       shieldCommitment: fieldToHex(outCommitment) as `0x${string}`,
       shieldNewRoot: fieldToHex(at.newRoot) as `0x${string}`,
       shieldCiphertext: packCipher(encryptNote(outNote, keys.viewPubHex)),

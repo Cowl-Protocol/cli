@@ -212,6 +212,55 @@ contract TestSwapRouter is ISwapRouter {
     }
 }
 
+/// The same fixed-rate venue wearing SwapRouter02's surface — the params struct
+/// has no `deadline`, which moves the selector. Deliberately does NOT expose the
+/// classic entrypoint, so an adapter that encodes the wrong dialect fails here
+/// exactly as it would against the real 02 router.
+contract TestSwapRouter02 {
+    address public immutable weth;
+    address public immutable usdg;
+
+    /// USDG (6 decimals) per one WETH (1e18).
+    uint256 public immutable usdgPerWeth;
+
+    error WrongPair();
+    error TooMuchRequested();
+
+    struct ExactOutputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        address recipient;
+        uint256 amountOut;
+        uint256 amountInMaximum;
+        uint160 sqrtPriceLimitX96;
+    }
+
+    constructor(address _weth, address _usdg, uint256 _usdgPerWeth) {
+        weth = _weth;
+        usdg = _usdg;
+        usdgPerWeth = _usdgPerWeth;
+    }
+
+    /// amountIn owed for an exact amountOut, rounded against the trader.
+    function amountInFor(address tokenIn, address tokenOut, uint256 amountOut) public view returns (uint256) {
+        if (tokenIn == weth && tokenOut == usdg) {
+            return (amountOut * 1e18 + usdgPerWeth - 1) / usdgPerWeth;
+        }
+        if (tokenIn == usdg && tokenOut == weth) {
+            return (amountOut * usdgPerWeth + 1e18 - 1) / 1e18;
+        }
+        revert WrongPair();
+    }
+
+    function exactOutputSingle(ExactOutputSingleParams calldata p) external payable returns (uint256 amountIn) {
+        amountIn = amountInFor(p.tokenIn, p.tokenOut, p.amountOut);
+        if (amountIn > p.amountInMaximum) revert TooMuchRequested();
+        require(IERC20Minimal(p.tokenIn).transferFrom(msg.sender, address(this), amountIn), "pull failed");
+        require(IERC20Minimal(p.tokenOut).transfer(p.recipient, p.amountOut), "pay failed");
+    }
+}
+
 /// Quoter over the router's rate, shaped like Uniswap's QuoterV2.
 contract TestQuoterV2 is IQuoterV2 {
     TestSwapRouter public immutable router;

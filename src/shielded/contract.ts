@@ -574,7 +574,7 @@ export async function quoteExactOutput(
     address: quoter,
     abi: QUOTER_ABI,
     functionName: "quoteExactOutputSingle",
-    args: [{ tokenIn, tokenOut, amount: amountOut, fee: 3000, sqrtPriceLimitX96: 0n }],
+    args: [{ tokenIn, tokenOut, amount: amountOut, fee: net.contracts.feeTier ?? 3000, sqrtPriceLimitX96: 0n }],
   });
   return result[0];
 }

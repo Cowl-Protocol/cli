@@ -33,6 +33,26 @@ interface IV3Router {
         returns (uint256 amountIn);
 }
 
+/// SwapRouter02 dropped `deadline` from the params struct, which moves the
+/// function selector — a classic encoding reverts on an 02 router and vice
+/// versa. The adapter is told which dialect its venue speaks at construction.
+interface IV3Router02 {
+    struct ExactOutputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        address recipient;
+        uint256 amountOut;
+        uint256 amountInMaximum;
+        uint160 sqrtPriceLimitX96;
+    }
+
+    function exactOutputSingle(ExactOutputSingleParams calldata params)
+        external
+        payable
+        returns (uint256 amountIn);
+}
+
 /// The trade adapter — a private trade in one atomic transaction.
 ///
 /// A swap has to touch public liquidity; no circuit changes that. What can be
@@ -66,6 +86,9 @@ contract CowlTradeAdapter {
     ShieldedPool public immutable pool;
     address public immutable router;
     address public immutable weth;
+    /// True when the venue is a SwapRouter02 (pons on mainnet); false for the
+    /// classic SwapRouter interface (the testnet venue).
+    bool public immutable router02;
 
     error NotMyPayout();
     error SameAsset();
@@ -73,10 +96,11 @@ contract CowlTradeAdapter {
 
     event Traded(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
 
-    constructor(ShieldedPool _pool, address _router, address _weth) {
+    constructor(ShieldedPool _pool, address _router, address _weth, bool _router02) {
         pool = _pool;
         router = _router;
         weth = _weth;
+        router02 = _router02;
     }
 
     /// The pool pays the unshielded leg here; WETH pays out unwraps here.
@@ -117,18 +141,30 @@ contract CowlTradeAdapter {
         // wraps; an ERC-20 leg arrived as itself.
         if (p.spend.token == 0) IWETH(weth).deposit{value: maxIn}();
         IERC20Adapter(swapIn).approve(router, maxIn);
-        uint256 spent = IV3Router(router).exactOutputSingle(
-            IV3Router.ExactOutputSingleParams({
-                tokenIn: swapIn,
-                tokenOut: swapOut,
-                fee: p.poolFee,
-                recipient: address(this),
-                deadline: block.timestamp,
-                amountOut: p.amountOut,
-                amountInMaximum: maxIn,
-                sqrtPriceLimitX96: 0
-            })
-        );
+        uint256 spent = router02
+            ? IV3Router02(router).exactOutputSingle(
+                IV3Router02.ExactOutputSingleParams({
+                    tokenIn: swapIn,
+                    tokenOut: swapOut,
+                    fee: p.poolFee,
+                    recipient: address(this),
+                    amountOut: p.amountOut,
+                    amountInMaximum: maxIn,
+                    sqrtPriceLimitX96: 0
+                })
+            )
+            : IV3Router(router).exactOutputSingle(
+                IV3Router.ExactOutputSingleParams({
+                    tokenIn: swapIn,
+                    tokenOut: swapOut,
+                    fee: p.poolFee,
+                    recipient: address(this),
+                    deadline: block.timestamp,
+                    amountOut: p.amountOut,
+                    amountInMaximum: maxIn,
+                    sqrtPriceLimitX96: 0
+                })
+            );
         IERC20Adapter(swapIn).approve(router, 0);
 
         // 3. Shield the output straight back under the trader's commitment.

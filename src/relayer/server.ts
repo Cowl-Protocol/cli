@@ -87,7 +87,7 @@ async function feeInToken(net: NetworkDef, token: Address, feeWei: bigint): Prom
     address: quoter,
     abi: QUOTER_ABI,
     functionName: "quoteExactOutputSingle",
-    args: [{ tokenIn: token, tokenOut: weth, amount: feeWei, fee: 3000, sqrtPriceLimitX96: 0n }],
+    args: [{ tokenIn: token, tokenOut: weth, amount: feeWei, fee: net.contracts.feeTier ?? 3000, sqrtPriceLimitX96: 0n }],
   });
   return result[0];
 }
