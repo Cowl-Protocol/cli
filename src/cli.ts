@@ -2180,13 +2180,6 @@ async function tradeOnChain(
   const quotedIn = await quoteExactOutput(net, inSwap, outSwap, amountOut).catch((e) =>
     die(`The venue can't price that trade: ${(e as Error).message.split("\n")[0]}`),
   );
-  const maxIn = opts.max ? parseUnits(opts.max, inMeta.decimals) : quotedIn;
-  if (maxIn < quotedIn) {
-    die(
-      `--max ${opts.max} ${inMeta.symbol} is under the quoted price ${formatUnits(quotedIn, inMeta.decimals)} ${inMeta.symbol}.`,
-    );
-  }
-
   // A relayed trade severs the last link — the gas payer. Fee in the input token.
   const relayUrl = resolveRelay(net, opts);
   const relayDefaulted = Boolean(relayUrl && !opts.relay && !opts.self);
@@ -2199,6 +2192,23 @@ async function tradeOnChain(
   }
   const relayerField = quote ? BigInt(quote.relayer) : 0n;
   const fee = quote ? quote.fee : 0n;
+
+  // The spend value is the swap's hard input cap, and it is fixed at proving
+  // time — tens of seconds before the router runs. On a live venue the price
+  // moves inside that window, and a cap at the bare quote reverts with STF the
+  // moment it ticks against the trade. Self-submitted trades add 1% of
+  // headroom: the router still charges the market price, and the adapter
+  // refunds the unused rest to the submitter, which is the trader's own
+  // wallet. Relayed trades keep the bare quote — that refund would tip the
+  // relayer instead.
+  const maxIn = opts.max
+    ? parseUnits(opts.max, inMeta.decimals)
+    : quotedIn + (relayUrl ? 0n : quotedIn / 100n);
+  if (maxIn < quotedIn) {
+    die(
+      `--max ${opts.max} ${inMeta.symbol} is under the quoted price ${formatUnits(quotedIn, inMeta.decimals)} ${inMeta.symbol}.`,
+    );
+  }
 
   heading("Private trade");
   row("Receive", `${bold(amount)} ${muted(outLabel)} ${muted("· exact")}`);
