@@ -24,44 +24,9 @@ in shared denominations and relayers keeping your wallet off the gas trail.
 
 ## How it works
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'primaryColor':'#111419','primaryTextColor':'#ece8dc','primaryBorderColor':'#d7fb08','lineColor':'#8c9196','clusterBkg':'#0a1a1f','clusterBorder':'#1c4a55','fontFamily':'monospace'}}}%%
-flowchart LR
-  U["you · terminal"] -->|cowl …| CLI
-
-  subgraph CLI["cowl CLI · your machine"]
-    direction TB
-    K["keystore<br/>scrypt + AES-256-GCM"]
-    S["stealth<br/>ERC-5564 · secp256k1"]
-    V["view key<br/>ed25519"]
-    R["viem client"]
-  end
-
-  CLI -->|JSON-RPC| CHAIN
-
-  subgraph CHAIN["Robinhood Chain · Arbitrum L2"]
-    direction TB
-    P["Shielded Pool"]
-    RL["Gasless Relayer"]
-    ST["$COWL Staking"]
-  end
-```
-
 Keys never leave your machine. The CLI signs locally and talks to the chain over JSON-RPC.
 
 ## Private trading & fees
-
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'primaryColor':'#111419','primaryTextColor':'#ece8dc','primaryBorderColor':'#d7fb08','lineColor':'#8c9196','clusterBkg':'#1a1012','clusterBorder':'#4a2124','fontFamily':'monospace'}}}%%
-flowchart LR
-  W["your wallet"] -->|shield| POOL["Shielded Pool"]
-  POOL -->|private trade| POOL
-  POOL -->|unshield| OUT["stealth address"]
-  POOL -->|protocol fee| FC["Fee Collector"]
-  FC -->|50%| STK["stakers"]
-  FC -->|30%| BURN["buyback & burn"]
-  FC -->|20%| TRE["treasury"]
-```
 
 Your book stays off the public explorer; fees flow back to stakers, the burn, and the treasury.
 See [fee structure](https://cowlprotocol.com/docs/fee-structure) ·
@@ -385,6 +350,49 @@ could tie them to one person. The other let you sign an ERC-20 transfer whose co
 read `Amount 1 tokens`, without ever naming what was leaving your wallet.
 
 ---
+
+## Diagrams
+
+> Rendered on GitHub; npm shows these as plain code.
+
+### How it works
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#111419','primaryTextColor':'#ece8dc','primaryBorderColor':'#d7fb08','lineColor':'#8c9196','clusterBkg':'#0a1a1f','clusterBorder':'#1c4a55','fontFamily':'monospace'}}}%%
+flowchart LR
+  U["you · terminal"] -->|cowl …| CLI
+
+  subgraph CLI["cowl CLI · your machine"]
+    direction TB
+    K["keystore<br/>scrypt + AES-256-GCM"]
+    S["stealth<br/>ERC-5564 · secp256k1"]
+    V["view key<br/>ed25519"]
+    R["viem client"]
+  end
+
+  CLI -->|JSON-RPC| CHAIN
+
+  subgraph CHAIN["Robinhood Chain · Arbitrum L2"]
+    direction TB
+    P["Shielded Pool"]
+    RL["Gasless Relayer"]
+    ST["$COWL Staking"]
+  end
+```
+
+### Private trading & fees
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#111419','primaryTextColor':'#ece8dc','primaryBorderColor':'#d7fb08','lineColor':'#8c9196','clusterBkg':'#1a1012','clusterBorder':'#4a2124','fontFamily':'monospace'}}}%%
+flowchart LR
+  W["your wallet"] -->|shield| POOL["Shielded Pool"]
+  POOL -->|private trade| POOL
+  POOL -->|unshield| OUT["stealth address"]
+  POOL -->|protocol fee| FC["Fee Collector"]
+  FC -->|50%| STK["stakers"]
+  FC -->|30%| BURN["buyback & burn"]
+  FC -->|20%| TRE["treasury"]
+```
 
 ## Links
 

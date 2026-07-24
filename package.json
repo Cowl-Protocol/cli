@@ -1,6 +1,6 @@
 {
   "name": "@cowlprotocol/cli",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Cowl Protocol CLI — private trading on Robinhood Chain from your terminal. Shielded pool, private trades, stealth addresses, view keys, and gasless relayer.",
   "type": "module",
   "bin": {
