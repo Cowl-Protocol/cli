@@ -13,6 +13,8 @@
 [![npm](https://img.shields.io/npm/v/@cowlprotocol/cli?style=flat-square&color=d7fb08&labelColor=0a0b0e)](https://www.npmjs.com/package/@cowlprotocol/cli)
 [![License](https://img.shields.io/badge/License-MIT-8c9196?style=flat-square&labelColor=0a0b0e)](./LICENSE)
 
+[**Website**](https://cowlprotocol.com) · [**Docs**](https://cowlprotocol.com/docs) · [**App**](https://app.cowlprotocol.com) · [**Public relayer**](https://relay.cowlprotocol.com)
+
 </div>
 
 Terminal CLI for [Cowl Protocol](https://cowlprotocol.com) — private trading on Robinhood Chain.
@@ -22,13 +24,47 @@ all from your terminal. Live on the Robinhood Chain testnet pool today: `shield`
 `unshield` all settle on chain, proven with ZK on your machine, with amounts crossing the boundary
 in shared denominations and relayers keeping your wallet off the gas trail.
 
+```console
+$ cowl shield 1 ETH            # your funds become notes in the shielded pool
+$ cowl markets                 # what trades privately
+
+Markets
+  ETH-USDG       3000 USDG
+  TSLA-USDG       250 USDG
+  NVDA-USDG       120 USDG
+  …
+
+$ cowl trade 0.3 USDG          # atomic private swap — the relayer pays the gas
+$ cowl send 0.05 ETH zcowl:0x… # private in-pool transfer
+$ cowl unshield 0.1 ETH        # exits in shared denominations, gasless
+```
+
+## What you get
+
+| | |
+|---|---|
+| 🎭 **Shielded pool** | Funds become hidden UTXO notes in a Poseidon Merkle tree. Amounts, owners, and your book never touch the explorer. |
+| ⚡ **Private trades** | Spend a shielded note of one token, receive a shielded note of another — one atomic transaction through public liquidity. |
+| 🕶️ **Gasless by default** | Boundary spends route through the public relayer, so your wallet never surfaces as the gas payer. `--self` opts out. |
+| 📬 **Stealth addresses** | ERC-5564-style one-time addresses over secp256k1. Fresh, unlinkable, always recoverable from one seed. |
+| 🔍 **View keys** | ed25519 selective disclosure. Hand an auditor read-only insight — and nothing more. |
+| 🎲 **Shared denominations** | Boundary amounts travel in shared tiers with randomized timing, so no one-of-a-kind number crosses the line. |
+| 🔐 **Local proving** | UltraHonk ZK proofs generated on your machine — the prover ships with the CLI, no toolchain to install. |
+| 🗝️ **Non-custodial** | scrypt + AES-256-GCM keystore in `~/.cowl`. You hold your keys; no server can move your funds. |
+
 ## How it works
 
-Keys never leave your machine. The CLI signs locally and talks to the chain over JSON-RPC.
+Everything private about you is computed on your machine. The CLI keeps an encrypted keystore,
+derives your stealth addresses and view key from it, builds every ZK proof locally, and talks to
+Robinhood Chain over plain JSON-RPC. Keys never leave your machine; the chain only ever sees
+commitments, nullifiers, and proofs it can verify but not read.
 
 ## Private trading & fees
 
-Your book stays off the public explorer; fees flow back to stakers, the burn, and the treasury.
+Shield once, then operate from inside the pool: private transfers to `zcowl:` addresses, private
+trades that settle atomically, exits in shared denominations behind a relayer. Your book stays off
+the public explorer; the protocol fee flows to the fee collector and splits between stakers, the
+buyback & burn, and the treasury.
 See [fee structure](https://cowlprotocol.com/docs/fee-structure) ·
 [fee collector](https://cowlprotocol.com/docs/fee-collector).
 
@@ -56,6 +92,48 @@ cowl ping                 # RPC connectivity check
 
 Everything lives in `~/.cowl/` (private, mode `0600`). Nothing leaves your machine unless you
 broadcast a transaction.
+
+---
+
+## Commands at a glance
+
+| Command | What it does |
+|---|---|
+| **Wallet & keys** | |
+| `cowl init` | guided setup: wallet, view key, network |
+| `cowl wallet` | new / import / export / address / passphrase |
+| `cowl address` | fresh one-time stealth address |
+| `cowl receive` | your `zcowl:` shielded payment address |
+| `cowl viewkey` | selective-disclosure view keys |
+| `cowl backup` / `cowl restore` | encrypted wallet bundle, out and back |
+| `cowl doctor` | audit file permissions and setup |
+| **Shielded pool** | |
+| `cowl shield <amount> [token]` | move funds into your private balance |
+| `cowl send <amount> <token> <to>` | public to `0x…`, private to `zcowl:…` |
+| `cowl trade <amount> <token>` | atomic private swap, exact-output |
+| `cowl unshield <amount> [token]` | move funds back out, gasless by default |
+| `cowl consolidate [token]` | merge fragmented notes |
+| `cowl scan` | find notes paid to you |
+| `cowl balance --shielded` | your private portfolio |
+| **Trading & portfolio** | |
+| `cowl markets` | private-trade pairs and indicative prices |
+| `cowl portfolio` | public + shielded holdings in one view |
+| `cowl token` | track ERC-20s in the portfolio |
+| `cowl balance` | native or `--token 0x…` balance |
+| **Relayer & staking** | |
+| `cowl relay serve` | turn this wallet into a relayer, earn fees |
+| `cowl relay quote <url>` | ask a relayer its price per spend |
+| `cowl stake <amount>` | stake $COWL (lights up when staking deploys) |
+| **Network & info** | |
+| `cowl` / `cowl status` | offline overview of wallet, network, contracts |
+| `cowl network` | list / switch networks |
+| `cowl config` | show / override RPC and contract addresses |
+| `cowl ping` | RPC connectivity check |
+| `cowl faucet` | testnet funds for the active network |
+| `cowl fees` | protocol fee schedule |
+| `cowl logo` | print the Cowl logo |
+
+Global flags on any command: `--network <key>` · `--rpc <url>` · `--json`.
 
 ---
 
@@ -148,9 +226,6 @@ cowl config set contracts.pool 0x…      # set a contract address once deployed
 cowl                            # or `cowl status` — offline overview of wallet, network, contracts
 cowl faucet                     # testnet faucet links for the active network + your address
 ```
-
-Global flags: `--network <key>`, `--rpc <url>`, and `--json` (machine-readable output) work on
-any command.
 
 ---
 
@@ -251,6 +326,7 @@ reverts the whole thing, so a trade completes end to end or never happened.
 `amount` is what you want to **receive**; `token` is the native symbol, `USDG`, or an ERC-20 address.
 
 ```bash
+cowl markets                                 # pairs and indicative prices
 cowl trade 0.3 USDG                          # receive exactly 0.3 USDG from your shielded balance
 cowl trade 0.001 ETH                         # receive 0.001 ETH for the counter-asset
 cowl trade 0.3 USDG --max 0.0002 ETH         # cap what you are willing to spend
@@ -397,7 +473,9 @@ flowchart LR
 ## Links
 
 - [Cowl Protocol](https://cowlprotocol.com) — website
+- [App](https://app.cowlprotocol.com) — the trading app
 - [Docs](https://cowlprotocol.com/docs)
+- [Public relayer](https://relay.cowlprotocol.com) — gasless boundary spends, on by default
 - [Test log](./TESTING.md) — every check, run by hand on testnet
 - [GitHub](https://github.com/Cowl-Protocol)
 
