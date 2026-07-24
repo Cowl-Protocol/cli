@@ -425,6 +425,14 @@ and a shielded payment address ending in the same bytes, so anyone holding both 
 could tie them to one person. The other let you sign an ERC-20 transfer whose confirmation screen
 read `Amount 1 tokens`, without ever naming what was leaving your wallet.
 
+The mainnet launch got the same treatment. [TESTING-MAINNET.md](./TESTING-MAINNET.md) walks the
+full private lifecycle on Robinhood Chain mainnet with real ETH — shield, two cross-wallet private
+sends, the first real private trade through the chain's live Uniswap V3, and the unshield that
+closes the round trip — 25 checks, every transaction hash linked, value conserved to the wei at
+every step. It also caught a real bug on the way, watched it fail closed with funds untouched, and
+shipped the fix in 0.6.4 the same day. That log is the reason to trust the atomicity claims: they
+are not claims, they are receipts.
+
 ---
 
 ## Diagrams
@@ -477,6 +485,7 @@ flowchart LR
 - [Docs](https://cowlprotocol.com/docs)
 - [Public relayer](https://relay.cowlprotocol.com) — gasless boundary spends, on by default
 - [Test log](./TESTING.md) — every check, run by hand on testnet
+- [Mainnet test log](./TESTING-MAINNET.md) — the full private flow on mainnet, with real ETH and every tx hash
 - [GitHub](https://github.com/Cowl-Protocol)
 
 ## License
