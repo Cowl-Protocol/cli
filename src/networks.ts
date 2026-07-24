@@ -88,7 +88,15 @@ export const NETWORKS: Record<string, NetworkDef> = {
     explorer: "https://robinhoodchain.blockscout.com",
     currency: { name: "Ether", symbol: "ETH", decimals: 18 },
     testnet: false,
-    contracts: {},
+    // Mainnet shielded pool, deployed 2026-07-24 with the TIER-1 hardening
+    // (fresh verifiers; chain-id 4663 is bound into every spend proof).
+    // ShieldVerifier 0x0D6E2e89…065fC · TransferVerifier 0x18670646…1275E.
+    // Trade venue (pons) + adapter land here once the router is verified classic
+    // SwapRouter (the adapter's exactOutputSingle passes a deadline field).
+    contracts: {
+      pool: "0x6f98666e9d05431dCd765AAa289a5E346AfA6a3E",
+      poolDeployBlock: 18121312n,
+    },
   },
   "arbitrum-sepolia": {
     key: "arbitrum-sepolia",
