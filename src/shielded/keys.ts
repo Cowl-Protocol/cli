@@ -24,6 +24,19 @@ function toCurveScalar(bytes: Uint8Array): bigint {
   return s === 0n ? 1n : s;
 }
 
+/**
+ * Which secret the account was grown from.
+ *
+ * `key` seeds from the private key — the terminal's own account, and what this
+ * CLI has always used. `sig-v1` seeds from a signature over a fixed message,
+ * because a browser wallet will never hand a web page the private key; that is
+ * the account app.cowlprotocol.com operates. Same formulas below either way, so
+ * the pool and the circuits cannot tell them apart — but a different seed is a
+ * different `mpk`, which is to say a different set of notes. One wallet really
+ * does own two shielded books, and they are told apart only here.
+ */
+export type AccountSpace = "key" | "sig-v1";
+
 export type ShieldedKeys = {
   sk: bigint; // spending key (secret)
   nk: bigint; // nullifying key
@@ -31,7 +44,21 @@ export type ShieldedKeys = {
   viewPriv: bigint; // secp256k1 scalar — decrypts incoming notes
   viewPubHex: string; // compressed secp256k1 point (no 0x)
   paymentAddress: string; // zcowl1… — share this to receive privately
+  space: AccountSpace;
 };
+
+/**
+ * The message the browser app has its wallet sign to unlock the same account.
+ *
+ * Fixed forever and byte-for-byte identical to the app's copy: change one
+ * character and every key below changes with it, stranding the notes behind
+ * them. Signing is deterministic (RFC 6979), so the same wallet signing this
+ * always produces the same bytes — in a browser wallet or here.
+ */
+export const SHIELDED_SIGN_MESSAGE =
+  "Cowl Protocol shielded account v1\n\n" +
+  "This signature derives the keys to your shielded balance. " +
+  "Only sign it on app.cowlprotocol.com.";
 
 export function deriveShieldedKeys(privateKeyHex: string): ShieldedKeys {
   const pk = hexToBytes(privateKeyHex.replace(/^0x/, ""));
@@ -52,6 +79,36 @@ export function deriveShieldedKeys(privateKeyHex: string): ShieldedKeys {
     viewPriv,
     viewPubHex,
     paymentAddress: encodePaymentAddress(mpk, viewPubHex),
+    space: "key",
+  };
+}
+
+/**
+ * The browser app's account, derived here from its unlock signature.
+ *
+ * Transcribed from app/lib/shielded/keys.ts and it must stay that way: the same
+ * domain tags, the same order, the same reductions. Anything that drifts sends
+ * this CLI looking for notes at an `mpk` the app never wrote to, and the only
+ * symptom is a balance that reads empty.
+ */
+export function deriveShieldedKeysFromSignature(signatureHex: string): ShieldedKeys {
+  const sig = hexToBytes(signatureHex.replace(/^0x/, ""));
+  if (sig.length < 64) throw new Error("Unlock signature is too short to derive keys from.");
+  const sk = hashToField(sig, utf8("cowl:shielded:spend:sig-v1"));
+  const nk = poseidon([sk]);
+  const mpk = poseidon([DOMAIN_MPK, sk, nk]);
+
+  const viewPriv = toCurveScalar(keccak_256(concatBytes(sig, utf8("cowl:shielded:view:sig-v1"))));
+  const viewPubHex = bytesToHex(Point.BASE.multiply(viewPriv).toRawBytes(true));
+
+  return {
+    sk,
+    nk,
+    mpk,
+    viewPriv,
+    viewPubHex,
+    paymentAddress: encodePaymentAddress(mpk, viewPubHex),
+    space: "sig-v1",
   };
 }
 

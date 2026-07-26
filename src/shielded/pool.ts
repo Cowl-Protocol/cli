@@ -9,7 +9,7 @@
 // storage layer loads and saves them. Every op is a real join-split: inputs are
 // nullified, outputs are fresh commitments, value is conserved. When the pool
 // contract deploys, these ops gain a proof and a transaction; the math is unchanged.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { formatEther } from "viem";
 import { COWL_DIR } from "../paths.js";
@@ -448,22 +448,53 @@ export function savePool(net: string, pool: Pool): void {
   ensureDir(POOL_DIR);
   writeFileSync(join(POOL_DIR, `pool-${net}.json`), JSON.stringify(pool, null, 2) + "\n", { mode: 0o600 });
 }
-export function loadWallet(net: string): Wallet {
-  const path = join(NOTES_DIR, `notes-${net}.json`);
-  return existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Wallet) : emptyWallet();
+/**
+ * Notes live in a file per shielded account, not per network.
+ *
+ * One wallet can operate two accounts (see AccountSpace), and their books have
+ * nothing to do with each other: a note belonging to one is unspendable by the
+ * other, and its nullifier is computed from a different key. Pooling them in
+ * one file would show a balance that cannot be moved and fail at proving time
+ * with nothing on screen explaining why.
+ */
+function notesPath(net: string, mpk: bigint): string {
+  return join(NOTES_DIR, `notes-${net}-${fieldToHex(mpk).slice(2, 18)}.json`);
 }
-function saveWallet(net: string, w: Wallet): void {
+
+/** Where notes lived before accounts were told apart: the key-derived book. */
+function legacyNotesPath(net: string): string {
+  return join(NOTES_DIR, `notes-${net}.json`);
+}
+
+export function loadWallet(net: string, keys: ShieldedKeys): Wallet {
+  const path = notesPath(net, keys.mpk);
+  if (existsSync(path)) return JSON.parse(readFileSync(path, "utf8")) as Wallet;
+  // The unscoped file predates account spaces, so it holds the key-derived
+  // book and only that one. Adopting it anywhere else would hand one account
+  // another's notes, so a signature-derived account starts empty instead.
+  const legacy = legacyNotesPath(net);
+  if (keys.space === "key" && existsSync(legacy)) {
+    return JSON.parse(readFileSync(legacy, "utf8")) as Wallet;
+  }
+  return emptyWallet();
+}
+
+function saveWallet(net: string, keys: ShieldedKeys, w: Wallet): void {
   ensureDir(NOTES_DIR);
-  writeFileSync(join(NOTES_DIR, `notes-${net}.json`), JSON.stringify(w, null, 2) + "\n", { mode: 0o600 });
+  writeFileSync(notesPath(net, keys.mpk), JSON.stringify(w, null, 2) + "\n", { mode: 0o600 });
+  // The legacy file has been carried into its scoped home; leaving it behind
+  // would let an older build write a divergent copy of the same book.
+  const legacy = legacyNotesPath(net);
+  if (keys.space === "key" && existsSync(legacy)) rmSync(legacy);
 }
 
 // ---- CLI-facing wrappers (load → apply → save) ------------------------------
 
 export function shield(net: string, keys: ShieldedKeys, value: bigint, token: bigint): ShieldResult {
-  const pool = loadPool(net), wallet = loadWallet(net);
+  const pool = loadPool(net), wallet = loadWallet(net, keys);
   const res = applyShield(pool, wallet, keys, value, token);
   savePool(net, pool);
-  saveWallet(net, wallet);
+  saveWallet(net, keys, wallet);
   return res;
 }
 
@@ -572,7 +603,7 @@ export function alignPoolToChain(
  * anything is written.
  */
 export function recordMyNote(net: string, keys: ShieldedKeys, note: Note, leafIndex: number): ShieldResult {
-  const pool = loadPool(net), wallet = loadWallet(net);
+  const pool = loadPool(net), wallet = loadWallet(net, keys);
 
   const c = fieldToHex(commitment(note));
   if (pool.commitments[leafIndex] !== c) {
@@ -585,13 +616,13 @@ export function recordMyNote(net: string, keys: ShieldedKeys, note: Note, leafIn
   if (!wallet.notes.some((n) => n.leafIndex === leafIndex)) wallet.notes.push(toStored(note, leafIndex));
   if (wallet.pending) wallet.pending = wallet.pending.filter((pn) => pn.commitment !== c);
   savePool(net, pool);
-  saveWallet(net, wallet);
+  saveWallet(net, keys, wallet);
   return { leafIndex, commitment: c, root: pool.root };
 }
 
 /** Stash a note's secrets on disk before its deposit broadcasts — see PendingNote. */
-export function stashPendingNote(net: string, note: Note): void {
-  const wallet = loadWallet(net);
+export function stashPendingNote(net: string, keys: ShieldedKeys, note: Note): void {
+  const wallet = loadWallet(net, keys);
   const c = fieldToHex(commitment(note));
   wallet.pending = wallet.pending ?? [];
   if (!wallet.pending.some((pn) => pn.commitment === c)) {
@@ -602,38 +633,38 @@ export function stashPendingNote(net: string, note: Note): void {
       commitment: c,
     });
   }
-  saveWallet(net, wallet);
+  saveWallet(net, keys, wallet);
 }
 
 export function scan(net: string, keys: ShieldedKeys): { discovered: number } {
-  const pool = loadPool(net), wallet = loadWallet(net);
+  const pool = loadPool(net), wallet = loadWallet(net, keys);
   const res = applyScan(pool, wallet, keys);
-  saveWallet(net, wallet);
+  saveWallet(net, keys, wallet);
   return res;
 }
 
 export function balance(net: string, keys: ShieldedKeys): Balance {
-  const pool = loadPool(net), wallet = loadWallet(net);
+  const pool = loadPool(net), wallet = loadWallet(net, keys);
   applyScan(pool, wallet, keys);
-  saveWallet(net, wallet);
+  saveWallet(net, keys, wallet);
   return computeBalance(wallet);
 }
 
 export function sendPrivate(net: string, keys: ShieldedKeys, recipient: PaymentAddress, value: bigint, token: bigint): SpendResult {
-  const pool = loadPool(net), wallet = loadWallet(net);
+  const pool = loadPool(net), wallet = loadWallet(net, keys);
   applyScan(pool, wallet, keys);
   const res = applySend(pool, wallet, keys, recipient, value, token);
   savePool(net, pool);
-  saveWallet(net, wallet);
+  saveWallet(net, keys, wallet);
   return res;
 }
 
 export function unshield(net: string, keys: ShieldedKeys, value: bigint, token: bigint): SpendResult {
-  const pool = loadPool(net), wallet = loadWallet(net);
+  const pool = loadPool(net), wallet = loadWallet(net, keys);
   applyScan(pool, wallet, keys);
   const res = applyUnshield(pool, wallet, keys, value, token);
   savePool(net, pool);
-  saveWallet(net, wallet);
+  saveWallet(net, keys, wallet);
   return res;
 }
 
@@ -645,11 +676,11 @@ export function trade(
   amountIn: bigint,
   amountOut: bigint,
 ): TradeResult {
-  const pool = loadPool(net), wallet = loadWallet(net);
+  const pool = loadPool(net), wallet = loadWallet(net, keys);
   applyScan(pool, wallet, keys);
   const res = applyTrade(pool, wallet, keys, inputToken, outputToken, amountIn, amountOut);
   savePool(net, pool);
-  saveWallet(net, wallet);
+  saveWallet(net, keys, wallet);
   return res;
 }
 

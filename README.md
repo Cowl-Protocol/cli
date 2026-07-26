@@ -217,8 +217,30 @@ cowl network use <key>          # switch active network
 
 cowl config show                # resolved network + contract addresses
 cowl config set rpcUrl <url>    # override the RPC
+cowl config unset rpcUrl        # drop an override, back to the network default
 cowl config set contracts.pool 0x…      # set a contract address once deployed
 ```
+
+## One wallet, two shielded accounts
+
+Your shielded keys grow from a secret, and there are two the wallet can offer.
+The terminal seeds them from your **private key**; the browser app cannot — no
+wallet hands a web page that — so it seeds them from a **signature** over a
+fixed message instead. Same formulas, different seed, so one wallet ends up
+owning two separate books of notes.
+
+The CLI holds the private key, so it can produce that signature itself and open
+the app's account too:
+
+```bash
+cowl config set shieldedAccount sig-v1   # operate the same book as app.cowlprotocol.com
+cowl config set shieldedAccount key      # back to the terminal's own book
+cowl receive                             # prints the address and names the account
+```
+
+Notes are filed per account, so switching never mixes the two. Before moving
+anything, run `cowl receive` and check the address matches the one on the app's
+Receive tab — identical addresses mean both sides landed on the same account.
 
 ## Status & faucet
 

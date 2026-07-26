@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import * as p from "@clack/prompts";
 import { isAddress, parseEther, parseUnits, formatEther, formatUnits, type Address } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import {
   acid,
   bone,
@@ -59,7 +60,14 @@ import { createViewKey, readViewKey, viewKeyExists } from "./viewkey.js";
 import { FEES, FEE_SPLIT } from "./fees.js";
 import { FAUCETS } from "./faucets.js";
 import { logo } from "./logo.js";
-import { deriveShieldedKeys, decodePaymentAddress, isPaymentAddress, type ShieldedKeys } from "./shielded/keys.js";
+import {
+  deriveShieldedKeys,
+  deriveShieldedKeysFromSignature,
+  decodePaymentAddress,
+  isPaymentAddress,
+  SHIELDED_SIGN_MESSAGE,
+  type ShieldedKeys,
+} from "./shielded/keys.js";
 import { tokenToField, tokenLabel } from "./shielded/note.js";
 import { shield as poolShield, unshield as poolUnshield, sendPrivate, balance as poolBalance, scan as poolScan, trade as poolTrade } from "./shielded/pool.js";
 import { planSend, planUnshield, planConsolidate, loadPool, loadWallet, type Pool, type Wallet, type PlannedSpend } from "./shielded/pool.js";
@@ -198,11 +206,40 @@ async function askNewPassphrase(message: string): Promise<string> {
 }
 
 /** Unlock the wallet and derive the shielded-pool keys. */
+/**
+ * The shielded account this profile operates, derived once per process.
+ *
+ * Two accounts can grow from one wallet. `key` seeds from the private key and
+ * is what the terminal has always used; `sig-v1` seeds from a signature over a
+ * fixed message, which is the only thing a browser wallet will give a web page
+ * — so it is the account app.cowlprotocol.com holds. Signing is deterministic,
+ * so the same wallet produces the same signature here as it does in MetaMask,
+ * and both sides land on the same notes.
+ *
+ * Memoised because several commands need the keys more than once and each
+ * derivation costs the user another passphrase prompt.
+ */
+let keysOnce: Promise<ShieldedKeys> | null = null;
+
+/**
+ * Every path that touches notes derives through here.
+ *
+ * Deriving straight from the private key somewhere else would quietly ignore
+ * the configured account and mint the deposit into a book the reader is not
+ * looking at — money in the pool, invisible in every balance they check.
+ */
+async function keysFromPrivateKey(pk: string): Promise<ShieldedKeys> {
+  if (loadConfig().shieldedAccount !== "sig-v1") return deriveShieldedKeys(pk);
+  const signature = await privateKeyToAccount(pk as `0x${string}`).signMessage({
+    message: SHIELDED_SIGN_MESSAGE,
+  });
+  return deriveShieldedKeysFromSignature(signature);
+}
+
 async function shieldedKeys(): Promise<ShieldedKeys> {
   requireWallet();
-  const pass = await askPassphrase();
-  const pk = exportPrivateKey(pass);
-  return deriveShieldedKeys(pk);
+  keysOnce ??= askPassphrase().then((pass) => keysFromPrivateKey(exportPrivateKey(pass)));
+  return keysOnce;
 }
 
 /**
@@ -688,7 +725,12 @@ config
       die((e as Error).message);
     }
     saveConfig(cfg);
-    ok(`Set ${acid(key)} = ${bone(value)} on ${muted(cfg.network)}`);
+    // Which book the wallet operates is not a property of any one network.
+    ok(
+      key === "shieldedAccount"
+        ? `Set ${acid(key)} = ${bone(value)} ${muted("· every network on this profile")}`
+        : `Set ${acid(key)} = ${bone(value)} on ${muted(cfg.network)}`,
+    );
   });
 
 config
@@ -704,7 +746,11 @@ config
     }
     saveConfig(cfg);
     const net = activeNetwork(cfg);
-    ok(`Cleared ${acid(key)} on ${muted(cfg.network)}`);
+    ok(
+      key === "shieldedAccount"
+        ? `Cleared ${acid(key)} ${muted("· back to the terminal's own account")}`
+        : `Cleared ${acid(key)} on ${muted(cfg.network)}`,
+    );
     if (key.endsWith("rpcUrl")) row("RPC", muted(net.rpcUrl));
   });
 
@@ -896,6 +942,7 @@ function runStatus(showSplash = false): void {
           viewKey: vkey ? { publicKey: vkey.publicKey, createdAt: vkey.createdAt } : null,
           network: { key: net.key, label: net.label, chainId: net.chainId, rpcUrl: net.rpcUrl, explorer: net.explorer, testnet: net.testnet },
           contracts: { pool: c.pool ?? null, relayer: c.relayer ?? null, staking: c.staking ?? null },
+          shieldedAccount: loadConfig().shieldedAccount ?? "key",
         },
         null,
         2,
@@ -912,6 +959,15 @@ function runStatus(showSplash = false): void {
   row("RPC", net.rpcUrl ? muted(net.rpcUrl) : dim("unset → cowl config set rpcUrl <url>"));
 
   heading("Shielded protocol");
+  // A wallet owns two shielded books and the balance commands only ever show
+  // one. Which one is on screen belongs on the status page, not in the docs.
+  const space = loadConfig().shieldedAccount ?? "key";
+  row(
+    "account",
+    space === "sig-v1"
+      ? `${acid("sig-v1")} ${muted("· shared with app.cowlprotocol.com")}`
+      : `${bone("key")} ${muted("· this terminal only · cowl config set shieldedAccount sig-v1")}`,
+  );
   const contract = (v?: string) => (v ? acid(v) : dim("not deployed yet"));
   row("pool", contract(c.pool));
   row("relayer", contract(c.relayer));
@@ -1336,7 +1392,7 @@ async function shieldOnChain(
   const pass = await askPassphrase();
   const { unlockKeystore } = await import("./keystore.js");
   const account = unlockKeystore(pass);
-  const keys = deriveShieldedKeys(exportPrivateKey(pass));
+  const keys = await keysFromPrivateKey(exportPrivateKey(pass));
 
   // One deposit per denomination part. Each iteration syncs, proves against the
   // fresh root, lands its transaction, and records the note before the next
@@ -1375,7 +1431,7 @@ async function shieldOnChain(
       // The note's secrets go to disk BEFORE the transaction: if anything dies between
       // the deposit landing and the local files updating, the blinding survives and
       // `cowl scan` adopts the note once its commitment shows up in the log.
-      stashPendingNote(net.key, note);
+      stashPendingNote(net.key, keys, note);
       const receipt = await submitShield(net, account, {
         token: tokenField,
         value: partValue,
@@ -1466,7 +1522,7 @@ async function spendOnChain(
   const pass = await askPassphrase();
   const { unlockKeystore } = await import("./keystore.js");
   const account = unlockKeystore(pass);
-  const keys = deriveShieldedKeys(exportPrivateKey(pass));
+  const keys = await keysFromPrivateKey(exportPrivateKey(pass));
 
   const startedAt = Date.now();
   const schedule = spreadMs ? spreadSchedule(builders.length, spreadMs) : null;
@@ -1483,7 +1539,7 @@ async function spendOnChain(
       // In a fan-out this also folds the previous part's change back into the wallet.
       await syncShieldedPool(net);
       poolScan(net.key, keys);
-      const built = builders[i]!(loadPool(net.key), loadWallet(net.key), keys, BigInt(account.address));
+      const built = builders[i]!(loadPool(net.key), loadWallet(net.key, keys), keys, BigInt(account.address));
 
       s.message(`${tag}Proving`);
       const proof = await proveTransfer(built.plan);
@@ -1644,7 +1700,8 @@ program
     // A join-split takes at most two inputs, so a balance spread across many
     // small notes caps what one spend can move. Each round merges the two
     // smallest into one; n notes settle in n − 2 spends.
-    const wallet = loadWallet(net.key);
+    const consolidateKeys = await shieldedKeys();
+    const wallet = loadWallet(net.key, consolidateKeys);
     const label = tokenLabel(tokenField, sym);
     const live = wallet.notes.filter(
       (n) => !n.spent && shieldedHexToField(n.token) === tokenField && shieldedHexToField(n.value) > 0n,
@@ -1746,10 +1803,19 @@ program
   .action(async () => {
     const { json } = ctx();
     const keys = await shieldedKeys();
-    out(json, { paymentAddress: keys.paymentAddress }, () => {
+    out(json, { paymentAddress: keys.paymentAddress, account: keys.space }, () => {
       heading("Shielded payment address");
       console.log(`  ${acid(keys.paymentAddress)}`);
       console.log(`  ${muted("Share this. Payments to it land in your shielded balance, unlinkable on-chain.")}`);
+      // One wallet holds two of these. Naming which one is on screen is the
+      // difference between a matching address and a mystery.
+      console.log(
+        `  ${muted(
+          keys.space === "sig-v1"
+            ? "Account: sig-v1 — the same book app.cowlprotocol.com shows."
+            : "Account: key — the terminal's own book, separate from the app's.",
+        )}`,
+      );
     });
   });
 
@@ -2256,7 +2322,7 @@ async function tradeOnChain(
   const pass = await askPassphrase();
   const { unlockKeystore } = await import("./keystore.js");
   const account = unlockKeystore(pass);
-  const keys = deriveShieldedKeys(exportPrivateKey(pass));
+  const keys = await keysFromPrivateKey(exportPrivateKey(pass));
 
   const s = p.spinner();
   s.start("Syncing the tree");
@@ -2267,7 +2333,7 @@ async function tradeOnChain(
     // Leg one: unshield maxIn + fee to the adapter, change back to us.
     const built = planUnshield(
       loadPool(net.key),
-      loadWallet(net.key),
+      loadWallet(net.key, keys),
       keys,
       maxIn,
       tokenInField,
@@ -2314,7 +2380,7 @@ async function tradeOnChain(
     };
 
     // The output note's secrets go to disk before anything broadcasts.
-    stashPendingNote(net.key, outNote);
+    stashPendingNote(net.key, keys, outNote);
 
     s.message(relayUrl ? "Relaying" : "Broadcasting");
     const receipt = relayUrl

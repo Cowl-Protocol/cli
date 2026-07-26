@@ -1,9 +1,16 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { CONFIG_PATH, ensureHome } from "./paths.js";
 import { NETWORKS, DEFAULT_NETWORK, type NetworkDef, type CowlContracts } from "./networks.js";
+import type { AccountSpace } from "./shielded/keys.js";
 
 export type Config = {
   network: string;
+  /**
+   * Which shielded account this profile operates — see AccountSpace in
+   * shielded/keys.ts. Not per-network: one wallet's choice of book holds
+   * wherever it goes. Absent means "key", the terminal's own account.
+   */
+  shieldedAccount?: AccountSpace;
   // Per-network overrides keyed by network key.
   overrides: Record<
     string,
@@ -26,6 +33,7 @@ export function loadConfig(): Config {
     const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as Partial<Config>;
     return {
       network: raw.network ?? DEFAULT_NETWORK,
+      ...(raw.shieldedAccount ? { shieldedAccount: raw.shieldedAccount } : {}),
       overrides: raw.overrides ?? {},
     };
   } catch {
@@ -105,9 +113,16 @@ export function setConfigValue(cfg: Config, key: string, value: string): Config 
       ov.contracts = { ...(ov.contracts ?? {}), [which]: value as `0x${string}` };
       break;
     }
+    // Not a network override: which book this wallet operates travels with it.
+    case "shieldedAccount": {
+      if (value !== "key" && value !== "sig-v1") {
+        throw new Error(`shieldedAccount is "key" (the terminal's own) or "sig-v1" (the browser app's), not "${value}".`);
+      }
+      return { ...cfg, shieldedAccount: value };
+    }
     default:
       throw new Error(
-        `Unknown config key "${key}". Try: rpcUrl, chainId, explorer, contracts.pool, contracts.relayer, contracts.staking`,
+        `Unknown config key "${key}". Try: shieldedAccount, rpcUrl, chainId, explorer, contracts.pool, contracts.relayer, contracts.staking`,
       );
   }
 
@@ -147,9 +162,14 @@ export function unsetConfigValue(cfg: Config, key: string): Config {
       ov.contracts = contracts;
       break;
     }
+    case "shieldedAccount": {
+      const next = { ...cfg };
+      delete next.shieldedAccount;
+      return next;
+    }
     default:
       throw new Error(
-        `Unknown config key "${key}". Try: rpcUrl, chainId, explorer, contracts.pool, contracts.relayer, contracts.staking`,
+        `Unknown config key "${key}". Try: shieldedAccount, rpcUrl, chainId, explorer, contracts.pool, contracts.relayer, contracts.staking`,
       );
   }
 
