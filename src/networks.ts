@@ -33,8 +33,12 @@ export type NetworkDef = {
   label: string;
   chainId: number;
   rpcUrl: string;
-  /** Tried when the primary RPC stops answering — public endpoints do. */
-  rpcFallback?: string;
+  /**
+   * Tried in order when the one before stops answering. Public endpoints do,
+   * and the official ones are unreachable from whole regions, so a network is
+   * only as usable as the rest of this list.
+   */
+  rpcFallbacks?: string[];
   /**
    * Public relayer used by default for boundary spends, so a wallet never
    * surfaces as the gas payer. `--relay <url>` points at a different one and
@@ -61,7 +65,10 @@ export const NETWORKS: Record<string, NetworkDef> = {
     label: "Robinhood Chain Testnet",
     chainId: 46630,
     rpcUrl: "https://46630.rpc.thirdweb.com",
-    rpcFallback: "https://rpc.testnet.chain.robinhood.com",
+    rpcFallbacks: [
+      "https://robinhood-sepolia-rpc.publicnode.com",
+      "https://rpc.testnet.chain.robinhood.com",
+    ],
     defaultRelay: "https://relay.cowlprotocol.com",
     explorer: "https://explorer.testnet.chain.robinhood.com",
     currency: { name: "Ether", symbol: "ETH", decimals: 18 },
@@ -87,10 +94,17 @@ export const NETWORKS: Record<string, NetworkDef> = {
     key: "robinhood-mainnet",
     label: "Robinhood Chain",
     chainId: 4663,
-    rpcUrl: "https://rpc.mainnet.chain.robinhood.com",
-    // The official RPC has gone quiet before (observed 2026-07-23); the
-    // explorer's JSON-RPC answered throughout, so reads fail over to it.
-    rpcFallback: "https://robinhoodchain.blockscout.com/api/eth-rpc",
+    // Fast, no rate limit worth speaking of, and reachable everywhere, but it
+    // answers historical eth_getLogs with a 403 — which viem reads as this
+    // endpoint declining, so the pool's log replay lands on the explorer below.
+    rpcUrl: "https://robinhood-rpc.publicnode.com",
+    rpcFallbacks: [
+      // The only archive source for a log replay, and it rate-limits hard.
+      "https://robinhoodchain.blockscout.com/api/eth-rpc",
+      // Robinhood's own endpoint is fastest where it answers at all, but it is
+      // unreachable from some regions, so it sits last rather than first.
+      "https://rpc.mainnet.chain.robinhood.com",
+    ],
     explorer: "https://robinhoodchain.blockscout.com",
     currency: { name: "Ether", symbol: "ETH", decimals: 18 },
     testnet: false,

@@ -24,6 +24,7 @@ import {
   saveConfig,
   activeNetwork,
   setConfigValue,
+  unsetConfigValue,
   trackedTokens,
   addTrackedToken,
   removeTrackedToken,
@@ -97,7 +98,7 @@ function ctx(): Ctx {
     cfg.network = opts.network;
   }
   let net = activeNetwork(cfg);
-  if (opts.rpc) net = { ...net, rpcUrl: opts.rpc };
+  if (opts.rpc) net = { ...net, rpcUrl: opts.rpc, rpcFallbacks: undefined };
   return { cfg, net, json: !!opts.json };
 }
 
@@ -688,6 +689,23 @@ config
     }
     saveConfig(cfg);
     ok(`Set ${acid(key)} = ${bone(value)} on ${muted(cfg.network)}`);
+  });
+
+config
+  .command("unset")
+  .description("drop an override and go back to the network's default")
+  .argument("<key>", "rpcUrl | chainId | explorer | contracts.pool | contracts.relayer | contracts.staking")
+  .action((key: string) => {
+    let cfg = loadConfig();
+    try {
+      cfg = unsetConfigValue(cfg, key);
+    } catch (e) {
+      die((e as Error).message);
+    }
+    saveConfig(cfg);
+    const net = activeNetwork(cfg);
+    ok(`Cleared ${acid(key)} on ${muted(cfg.network)}`);
+    if (key.endsWith("rpcUrl")) row("RPC", muted(net.rpcUrl));
   });
 
 // ---- balance ----------------------------------------------------------------
@@ -1762,12 +1780,19 @@ function fmt(x: bigint, decimals = 2): string {
   });
 }
 
-/** Trim a WAD amount to at most 6 decimals, without trailing zeros. */
+/**
+ * A WAD amount in full, exact to the last base unit.
+ *
+ * Rounding a balance is a lie about money: cutting the fraction at six decimals
+ * printed 0.000745602201671059 ETH as 0.000745, and a 6-decimal token whose
+ * meta could not be read at all showed a real 0.1 USDG as a flat 0. Only
+ * trailing zeros come off, because they carry nothing.
+ */
 function fmtAmount(x: bigint): string {
   const s = formatEther(x);
   if (!s.includes(".")) return s;
   const [whole, frac = ""] = s.split(".");
-  const trimmed = frac.slice(0, 6).replace(/0+$/, "");
+  const trimmed = frac.replace(/0+$/, "");
   return trimmed ? `${whole}.${trimmed}` : whole!;
 }
 
@@ -1779,7 +1804,9 @@ function toWad(raw: bigint, decimals: number): bigint {
 
 type PortfolioRow = { symbol: string; amount: bigint; value: bigint | null; notes?: number };
 
-const COLS = { asset: 8, amount: 16, value: 15, share: 7 };
+// Amounts print every decimal they have, so the column is wide enough for a
+// full 18-decimal balance rather than making one wrap the table.
+const COLS = { asset: 8, amount: 24, value: 15, share: 7 };
 
 function valueOf(symbol: string, amountWad: bigint): bigint | null {
   const price = priceInQuoteWad(symbol);

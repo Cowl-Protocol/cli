@@ -17,12 +17,39 @@ import { toViemChain, type NetworkDef } from "./networks.js";
 // portfolio read stretches into tens of seconds.
 const TRANSPORT_BATCH = { batch: { wait: 16 } } as const;
 
-/** The network's transport: its RPC, failing over to the fallback when one is
- * declared and the primary stops answering. */
+/**
+ * A provider saying "that block range is too wide" is not a provider failing,
+ * and a revert is the chain's answer rather than an endpoint's. Trying the rest
+ * of the list on either only spends their timeouts: the next node repeats the
+ * revert, and by the time the last one has also declined, the error the caller
+ * reads belongs to whichever endpoint happened to be last — so a range cap can
+ * no longer be told from an outage, and never gets split.
+ */
+function surfaceImmediately(error: Error): boolean {
+  return (
+    /limit|range|exceed|too (?:many|large|broad)/i.test(error.message) ||
+    /execution reverted|reverted with|invalid opcode|out of gas|EstimateGas/i.test(error.message)
+  );
+}
+
+/** The explorer serves the historical log replay nothing else will, and it
+ * rate-limits hard, so it waits patiently instead of being raced. */
+function isExplorerEndpoint(url: string): boolean {
+  return /blockscout|explorer/i.test(url);
+}
+
+/** The network's endpoints in preference order, each failing over to the next. */
 function transportFor(net: NetworkDef) {
-  const primary = http(net.rpcUrl, TRANSPORT_BATCH);
-  if (!net.rpcFallback) return primary;
-  return fallback([primary, http(net.rpcFallback, TRANSPORT_BATCH)]);
+  const urls = [net.rpcUrl, ...(net.rpcFallbacks ?? [])].filter(Boolean);
+  if (urls.length === 1) return http(urls[0]!, TRANSPORT_BATCH);
+  return fallback(
+    urls.map((url) =>
+      isExplorerEndpoint(url)
+        ? http(url, { ...TRANSPORT_BATCH, timeout: 30_000, retryCount: 3, retryDelay: 3_000 })
+        : http(url, { ...TRANSPORT_BATCH, timeout: 8_000, retryCount: 1 }),
+    ),
+    { shouldThrow: surfaceImmediately },
+  );
 }
 
 export function publicClient(net: NetworkDef): PublicClient {

@@ -49,7 +49,9 @@ export function activeNetwork(cfg: Config): NetworkDef {
   const ov = cfg.overrides[cfg.network] ?? {};
   return {
     ...base,
-    ...(ov.rpcUrl !== undefined ? { rpcUrl: ov.rpcUrl } : {}),
+    // Pinning an RPC means that one and no other — a relayer pins deliberately,
+    // and silently falling back to a public endpoint would undo the choice.
+    ...(ov.rpcUrl !== undefined ? { rpcUrl: ov.rpcUrl, rpcFallbacks: undefined } : {}),
     ...(ov.chainId !== undefined ? { chainId: ov.chainId } : {}),
     ...(ov.explorer !== undefined ? { explorer: ov.explorer } : {}),
     contracts: { ...base.contracts, ...(ov.contracts ?? {}) },
@@ -101,6 +103,48 @@ export function setConfigValue(cfg: Config, key: string, value: string): Config 
     case "contracts.staking": {
       const which = key.split(".")[1] as keyof CowlContracts;
       ov.contracts = { ...(ov.contracts ?? {}), [which]: value as `0x${string}` };
+      break;
+    }
+    default:
+      throw new Error(
+        `Unknown config key "${key}". Try: rpcUrl, chainId, explorer, contracts.pool, contracts.relayer, contracts.staking`,
+      );
+  }
+
+  return { ...cfg, overrides: { ...cfg.overrides, [netKey]: ov } };
+}
+
+/**
+ * Drop an override so the network's own default takes over again.
+ *
+ * An override outlives whatever made it: an RPC pinned at an ssh tunnel keeps
+ * being the RPC long after the tunnel dies, and every read then fails with
+ * nothing on screen pointing at the reason. Undoing one meant editing the JSON.
+ */
+export function unsetConfigValue(cfg: Config, key: string): Config {
+  const netKey = cfg.network;
+  const ov = { ...(cfg.overrides[netKey] ?? {}) };
+
+  switch (key) {
+    case "network.rpcUrl":
+    case "rpcUrl":
+      delete ov.rpcUrl;
+      break;
+    case "network.chainId":
+    case "chainId":
+      delete ov.chainId;
+      break;
+    case "network.explorer":
+    case "explorer":
+      delete ov.explorer;
+      break;
+    case "contracts.pool":
+    case "contracts.relayer":
+    case "contracts.staking": {
+      const which = key.split(".")[1] as keyof CowlContracts;
+      const contracts = { ...(ov.contracts ?? {}) };
+      delete contracts[which];
+      ov.contracts = contracts;
       break;
     }
     default:
