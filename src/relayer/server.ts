@@ -15,6 +15,7 @@ import type { NetworkDef } from "../networks.js";
 import { publicClient } from "../chain.js";
 import { poolAddress, simulateSpend, submitSpend, simulateTrade, submitTrade } from "../shielded/contract.js";
 import { decodeSpend, decodeTrade } from "./client.js";
+import { sweepToGas } from "./rebalance.js";
 
 /** The V3 quoter surface used to price a fee in a non-native token. */
 const QUOTER_ABI = [
@@ -60,6 +61,16 @@ const GAS_PER_TRADE = 15_000_000n;
 
 /** Below this many spends' worth of gas, every quote says so on the console. */
 const LOW_FLOAT_SPENDS = 20n;
+
+/**
+ * When the float has fallen this far below where it started, sell the fees.
+ *
+ * A relayer is paid in whatever token each spend moved and pays gas in the
+ * native coin, so without this the two never meet: tokens accumulate while the
+ * float drains away. Half is late enough that a sweep is worth its own gas and
+ * early enough that there is still gas left to pay for one.
+ */
+const SWEEP_AT_FRACTION = 2n; // half of the float first seen
 
 /** Spends waiting in line before new ones get a 429. Spends serialize on the
  * pool root, so a long queue only grows stale — better to say busy early. */
@@ -181,6 +192,49 @@ export function startRelayServer(
   let chain: Promise<void> = Promise.resolve();
   let queued = 0;
 
+  // Every ERC-20 a fee has ever arrived in. Kept in memory on purpose: a
+  // restart forgets nothing that matters, since the sweep re-reads balances
+  // from the chain and a token with none is skipped in a single call.
+  const feeTokens = new Set<Address>();
+  // The float as it stood when this relayer started, and the mark it sweeps at.
+  let floatHighWater = 0n;
+  let sweeping = false;
+
+  /**
+   * Sell the fees back into gas, once the float has fallen far enough.
+   *
+   * Runs after a relay rather than before one, so a withdrawal never waits on a
+   * swap. Failures are swallowed: a sweep that cannot run leaves the relayer
+   * exactly as it was, and the next quote will still say the float is thin.
+   */
+  async function maybeSweep(): Promise<void> {
+    if (sweeping || feeTokens.size === 0) return;
+    const float = await publicClient(net).getBalance({ address: account.address });
+    if (floatHighWater === 0n) floatHighWater = float;
+    if (float > floatHighWater / SWEEP_AT_FRACTION) return;
+
+    sweeping = true;
+    try {
+      console.log(`  float at ${float} wei, past half of ${floatHighWater} — selling fees back into gas`);
+      const report = await sweepToGas(net, account, [...feeTokens]);
+      for (const s of report.sold) {
+        console.log(`  sold ${s.amountIn} ${s.symbol} -> ~${s.ethOut} wei  ${s.hash}`);
+      }
+      for (const s of report.skipped) {
+        console.log(`  kept ${s.symbol}: ${s.reason}`);
+      }
+      const gained = report.floatAfter - report.floatBefore;
+      console.log(`  float ${report.floatBefore} -> ${report.floatAfter} wei (${gained >= 0n ? "+" : ""}${gained})`);
+      // The mark follows the float up, so the next sweep waits for the next
+      // real decline rather than firing again on the same shortfall.
+      if (report.floatAfter > floatHighWater / SWEEP_AT_FRACTION) floatHighWater = report.floatAfter;
+    } catch (e) {
+      console.warn(`  sweep failed: ${(e as Error).message.split("\n")[0]}`);
+    } finally {
+      sweeping = false;
+    }
+  }
+
   const server = createServer((req, res) => {
     void (async () => {
       try {
@@ -295,6 +349,12 @@ export function startRelayServer(
               queued -= 1;
             }
             onEvent({ kind: "relayed", hash: receipt.hash, feeWei: spend.fee, gasUsed: receipt.gasUsed });
+            // The fee just landed in this token; remember it so a sweep knows
+            // where to look, then see whether the float wants topping up.
+            if (spend.token !== 0n) {
+              feeTokens.add(`0x${spend.token.toString(16).padStart(40, "0")}` as Address);
+            }
+            void maybeSweep();
             send(res, 200, {
               hash: receipt.hash,
               gasUsed: receipt.gasUsed.toString(),
