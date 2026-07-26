@@ -22,7 +22,7 @@ await esbuild.build({
   outfile: out,
   logLevel: "error",
 });
-const { tiersFor, decompose, groupParts, MAX_BOUNDARY_TXS } = await import(out);
+const { tiersFor, decompose, groupParts, sharedCeiling, MAX_BOUNDARY_TXS } = await import(out);
 
 let failed = 0;
 function eq(label, got, want) {
@@ -37,12 +37,30 @@ function eq(label, got, want) {
 
 const E = (s) => BigInt(Math.round(Number(s) * 1e6)) * 10n ** 12n; // ether → wei, test-only
 
-// The ladder: 10 · 1 · 0.1 · 0.01 · 0.001 ETH in wei, largest first.
-eq("tiersFor(18)", tiersFor(18), [10n ** 19n, 10n ** 18n, 10n ** 17n, 10n ** 16n, 10n ** 15n]);
-// USDC-like 6 decimals: 10 · 1 · 0.1 · 0.01 · 0.001 tokens.
-eq("tiersFor(6)", tiersFor(6), [10n ** 7n, 10n ** 6n, 10n ** 5n, 10n ** 4n, 10n ** 3n]);
+// The ladder: 1,000,000 down to 0.001 whole tokens, largest first.
+const decade = (from, to) => {
+  const out = [];
+  for (let e = from; e >= to; e--) out.push(10n ** BigInt(e));
+  return out;
+};
+eq("tiersFor(18)", tiersFor(18), decade(24, 15));
+// USDC-like 6 decimals: the same ladder, shifted to its base units.
+eq("tiersFor(6)", tiersFor(6), decade(12, 3));
 // Degenerate low-decimals token never emits a sub-base-unit tier.
-eq("tiersFor(2)", tiersFor(2), [10n ** 3n, 10n ** 2n, 10n ** 1n, 10n ** 0n]);
+eq("tiersFor(2)", tiersFor(2), decade(8, 0));
+
+// The ladder has to reach a million-supply token, or its holders cannot cross
+// the boundary in shared denominations at all: at a ten-token top tier this
+// amount decomposed into 310,000 deposits, and no rounding could rescue it.
+eq("millions split into a handful", decompose(E("3100000"), 18).parts.length, 4);
+// And past the ceiling, nothing rounds into range — that is what it is for.
+eq("shared ceiling(18)", sharedCeiling(18), 10n ** 24n * BigInt(MAX_BOUNDARY_TXS));
+eq(
+  "above the ceiling exceeds the cap",
+  decompose(sharedCeiling(18) + 10n ** 24n, 18).parts.length > MAX_BOUNDARY_TXS,
+  true,
+);
+eq("at the ceiling fits exactly", decompose(sharedCeiling(18), 18).parts.length, MAX_BOUNDARY_TXS);
 
 // A tier amount is a single part.
 eq("0.1 is one deposit", decompose(E("0.1"), 18), { parts: [E("0.1")], remainder: 0n });

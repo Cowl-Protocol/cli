@@ -73,7 +73,7 @@ import { tokenToField, tokenLabel } from "./shielded/note.js";
 import { shield as poolShield, unshield as poolUnshield, sendPrivate, balance as poolBalance, scan as poolScan, trade as poolTrade } from "./shielded/pool.js";
 import { planSend, planUnshield, planConsolidate, loadPool, loadWallet, type Pool, type Wallet, type PlannedSpend } from "./shielded/pool.js";
 import { hexToField as shieldedHexToField } from "./shielded/field.js";
-import { decompose, groupParts, tiersFor, MAX_BOUNDARY_TXS } from "./shielded/denominations.js";
+import { decompose, groupParts, tiersFor, sharedCeiling, MAX_BOUNDARY_TXS } from "./shielded/denominations.js";
 import { fetchQuote, relaySpend, relayTrade, type RelayQuote } from "./relayer/client.js";
 import { MARKETS, PROTOCOL_FEE_BPS, QUOTE_SYMBOL, WAD, priceInQuoteWad, quoteTrade, type Side } from "./shielded/market.js";
 
@@ -1319,11 +1319,22 @@ function boundaryParts(
     );
   }
   if (d.parts.length > MAX_BOUNDARY_TXS) {
+    const headline = `${formatUnits(value, decimals)} ${label} splits into ${d.parts.length} transactions — the cap is ${MAX_BOUNDARY_TXS}.`;
+    const ceiling = sharedCeiling(decimals);
+    // Above the ceiling every deposit is already a whole top tier, so no round
+    // number fits and suggesting one sends the reader in a circle. Name the
+    // largest amount that can travel shared instead.
+    if (value > ceiling) {
+      die(
+        headline,
+        `Shared denominations top out at ${formatUnits(ceiling, decimals)} ${label}. Send at most that, or add --exact to move this amount in a single transaction.`,
+      );
+    }
     const top = tiersFor(decimals).find((t) => t <= value)!;
     const rounded = ((value + top - 1n) / top) * top;
     const roundedCount = decompose(rounded, decimals).parts.length;
     die(
-      `${formatUnits(value, decimals)} ${label} splits into ${d.parts.length} transactions — the cap is ${MAX_BOUNDARY_TXS}.`,
+      headline,
       `Round it (${formatUnits(rounded, decimals)} ${label} goes in ${roundedCount} transaction${roundedCount === 1 ? "" : "s"}) or add --exact for a single transaction.`,
     );
   }
