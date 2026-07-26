@@ -1,8 +1,36 @@
 # Caddy provisions and renews a Let's Encrypt certificate for the host below on
 # its own, as long as the DNS A record points at this VPS and ports 80 and 443
-# are reachable. It terminates TLS and reverse-proxies to the relayer daemon,
-# which listens on localhost only (never expose 4663 to the public internet).
+# are reachable. It terminates TLS and reverse-proxies to the relayer daemons,
+# which listen on localhost only (never expose 4663/4664 to the public internet).
+#
+# One relayer per chain, told apart by path rather than by hostname so mainnet
+# needs no second DNS record: testnet at the root, mainnet under /mainnet.
+# `handle_path` strips the prefix, so each daemon sees /quote and /relay either
+# way and the client only ever changes its base URL.
 
 relay.cowlprotocol.com {
-	reverse_proxy 127.0.0.1:4663
+	# The browser app calls this from another origin, so the preflight has to be
+	# answered or the request never leaves the tab. Only the app's own origin is
+	# allowed: a relayer takes an already proven spend and can neither read nor
+	# alter it, but there is no reason to hand every site on the internet a
+	# submit button pointed at this gas balance.
+	@preflight method OPTIONS
+	handle @preflight {
+		header Access-Control-Allow-Origin "https://app.cowlprotocol.com"
+		header Access-Control-Allow-Methods "GET, POST, OPTIONS"
+		header Access-Control-Allow-Headers "content-type"
+		header Access-Control-Max-Age "86400"
+		respond 204
+	}
+
+	header Access-Control-Allow-Origin "https://app.cowlprotocol.com"
+	header Vary "Origin"
+
+	handle_path /mainnet/* {
+		reverse_proxy 127.0.0.1:4664
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:4663
+	}
 }

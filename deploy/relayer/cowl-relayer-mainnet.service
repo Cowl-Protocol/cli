@@ -1,0 +1,35 @@
+[Unit]
+Description=Cowl gasless relayer (Robinhood Chain mainnet)
+Documentation=https://www.cowlprotocol.com/docs/gasless-relayer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cowl-relayer
+Group=cowl-relayer
+
+# A relayer binds to one chain at boot, so mainnet runs as its own unit beside
+# the testnet one. Separate homes mean separate keystores and separate gas
+# balances: a mainnet outage cannot drain the testnet float, and topping one up
+# never touches the other.
+Environment=COWL_HOME=/opt/cowl-relayer/data-mainnet
+
+# COWL_PASSPHRASE for the mainnet keystore, root-owned and chmod 600.
+EnvironmentFile=/etc/cowl-relayer/relayer-mainnet.env
+
+# Port 4664 so it sits beside testnet's 4663. Caddy routes /mainnet/* here.
+# --margin is the relayer's take over raw gas, in percent.
+ExecStart=/usr/local/bin/cowl -n robinhood-mainnet relay serve --port 4664 --margin 25
+
+Restart=on-failure
+RestartSec=5s
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/cowl-relayer/data-mainnet
+
+[Install]
+WantedBy=multi-user.target
