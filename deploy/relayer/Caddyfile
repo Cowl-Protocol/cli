@@ -9,21 +9,32 @@
 # way and the client only ever changes its base URL.
 
 relay.cowlprotocol.com {
-	# The browser app calls this from another origin, so the preflight has to be
-	# answered or the request never leaves the tab. Only the app's own origin is
-	# allowed: a relayer takes an already proven spend and can neither read nor
-	# alter it, but there is no reason to hand every site on the internet a
-	# submit button pointed at this gas balance.
-	@preflight method OPTIONS
+	# The browser calls this from another origin, so the preflight has to be
+	# answered or the request never leaves the tab.
+	#
+	# The allow-list is a courtesy, not a wall. CORS binds browsers and nothing
+	# else: any server, any curl, can post a spend here already, which is what a
+	# public relayer is for. So it covers the deployed app and a dev server on
+	# localhost, and refusing anything beyond that only stops a stray page from
+	# spending this gas float through a visitor's browser without them asking.
+	@allowed header_regexp Origin ^(https://app\.cowlprotocol\.com|http://localhost(:[0-9]+)?|http://127\.0\.0\.1(:[0-9]+)?)$
+
+	@preflight {
+		method OPTIONS
+		header_regexp Origin ^(https://app\.cowlprotocol\.com|http://localhost(:[0-9]+)?|http://127\.0\.0\.1(:[0-9]+)?)$
+	}
 	handle @preflight {
-		header Access-Control-Allow-Origin "https://app.cowlprotocol.com"
+		header Access-Control-Allow-Origin "{http.request.header.Origin}"
 		header Access-Control-Allow-Methods "GET, POST, OPTIONS"
 		header Access-Control-Allow-Headers "content-type"
 		header Access-Control-Max-Age "86400"
+		header Vary "Origin"
 		respond 204
 	}
 
-	header Access-Control-Allow-Origin "https://app.cowlprotocol.com"
+	# Echoed back rather than hard-coded, since a browser only accepts a header
+	# that names its own origin exactly.
+	header @allowed Access-Control-Allow-Origin "{http.request.header.Origin}"
 	header Vary "Origin"
 
 	handle_path /mainnet/* {
