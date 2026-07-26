@@ -35,7 +35,7 @@ Markets
   …
 
 $ cowl trade 0.3 USDG          # atomic private swap — the relayer pays the gas
-$ cowl send 0.05 ETH zcowl:0x… # private in-pool transfer
+$ cowl send 0.05 ETH zcowl1… # private in-pool transfer
 $ cowl unshield 0.1 ETH        # exits in shared denominations, gasless
 ```
 
@@ -61,7 +61,7 @@ commitments, nullifiers, and proofs it can verify but not read.
 
 ## Private trading & fees
 
-Shield once, then operate from inside the pool: private transfers to `zcowl:` addresses, private
+Shield once, then operate from inside the pool: private transfers to `zcowl1…` addresses, private
 trades that settle atomically, exits in shared denominations behind a relayer. Your book stays off
 the public explorer; the protocol fee flows to the fee collector and splits between stakers, the
 buyback & burn, and the treasury.
@@ -103,13 +103,13 @@ broadcast a transaction.
 | `cowl init` | guided setup: wallet, view key, network |
 | `cowl wallet` | new / import / export / address / passphrase |
 | `cowl address` | fresh one-time stealth address |
-| `cowl receive` | your `zcowl:` shielded payment address |
+| `cowl receive` | your `zcowl1…` shielded payment address |
 | `cowl viewkey` | selective-disclosure view keys |
 | `cowl backup` / `cowl restore` | encrypted wallet bundle, out and back |
 | `cowl doctor` | audit file permissions and setup |
 | **Shielded pool** | |
 | `cowl shield <amount> [token]` | move funds into your private balance |
-| `cowl send <amount> <token> <to>` | public to `0x…`, private to `zcowl:…` |
+| `cowl send <amount> <token> <to>` | public to `0x…`, private to `zcowl1…` |
 | `cowl trade <amount> <token>` | atomic private swap, exact-output |
 | `cowl unshield <amount> [token]` | move funds back out, gasless by default |
 | `cowl consolidate [token]` | merge fragmented notes |
@@ -267,8 +267,8 @@ public explorer.
 ```bash
 cowl shield 0.1 ETH             # move funds into your shielded balance
 cowl balance --shielded         # your private portfolio, grouped by token
-cowl receive                    # your zcowl: payment address — share it to be paid privately
-cowl send 0.05 ETH zcowl:0x…    # private, in-pool transfer to a zcowl: address
+cowl receive                    # your zcowl payment address — share it to be paid privately
+cowl send 0.05 ETH zcowl1…      # private, in-pool transfer to a zcowl address
 cowl trade 0.3 USDG             # privately swap your shielded balance for another token
 cowl consolidate                # merge fragmented notes so any amount spends at once
 cowl scan                       # find notes paid to you

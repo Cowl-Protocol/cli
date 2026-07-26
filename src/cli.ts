@@ -968,17 +968,17 @@ program
 
 program
   .command("send")
-  .description("send funds — publicly to an 0x address, or privately to a zcowl: address")
+  .description("send funds — publicly to an 0x address, or privately to a zcowl address")
   .argument("<amount>", "amount, e.g. 0.01")
   .argument("<token>", "native symbol (e.g. ETH) or an ERC-20 address")
-  .argument("<to>", "recipient: 0x address (public) or zcowl: address (private)")
+  .argument("<to>", "recipient: 0x address (public) or zcowl address (private)")
   .option("--relay <url>", "route the private send through a specific relayer instead of the network default")
   .option("--self", "submit the private send yourself, skipping the default relayer")
   .action(async (amount: string, token: string, to: string, opts: { relay?: string; self?: boolean }) => {
     const { net } = ctx();
     if (!(Number(amount) > 0)) die("Amount must be positive.");
 
-    // A zcowl: recipient is a private, in-pool transfer from your shielded balance.
+    // A zcowl recipient is a private, in-pool transfer from your shielded balance.
     if (isPaymentAddress(to)) {
       const sym = net.currency.symbol;
       const tokenField = tokenToField(token, sym);
@@ -1041,7 +1041,10 @@ program
     }
 
     const address = requireWallet();
-    if (!isAddress(to)) die("Invalid recipient address.", "Use a 0x address (public) or a zcowl: address (private).");
+    // A near-miss zcowl address means a typo the checksum caught — say that,
+    // not "invalid address", so nobody retypes it into a 0x field.
+    if (/^zcowl/i.test(to)) die("That zcowl address doesn't decode.", "A character is missing or mistyped — re-copy it from the recipient.");
+    if (!isAddress(to)) die("Invalid recipient address.", "Use a 0x address (public) or a zcowl address (private).");
 
     const isNative = token.toUpperCase() === net.currency.symbol.toUpperCase();
     if (!isNative && !isAddress(token)) die(`Unknown token "${token}".`, `Use ${net.currency.symbol} or an ERC-20 address.`);

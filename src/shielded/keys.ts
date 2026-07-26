@@ -10,6 +10,7 @@
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3";
 import { bytesToHex, hexToBytes, concatBytes } from "@noble/hashes/utils";
+import { bech32m } from "@scure/base";
 import { hashToField, poseidon, fieldToHex, hexToField, DOMAIN_MPK } from "./field.js";
 
 const Point = secp256k1.ProjectivePoint;
@@ -29,7 +30,7 @@ export type ShieldedKeys = {
   mpk: bigint; // master public key — note owner id
   viewPriv: bigint; // secp256k1 scalar — decrypts incoming notes
   viewPubHex: string; // compressed secp256k1 point (no 0x)
-  paymentAddress: string; // zcowl:0x… — share this to receive privately
+  paymentAddress: string; // zcowl1… — share this to receive privately
 };
 
 export function deriveShieldedKeys(privateKeyHex: string): ShieldedKeys {
@@ -54,21 +55,44 @@ export function deriveShieldedKeys(privateKeyHex: string): ShieldedKeys {
   };
 }
 
-/** zcowl:0x<mpk:32B><viewPub:33B compressed> */
+/**
+ * zcowl1… — bech32m over <mpk:32B><viewPub:33B compressed>, prefix "zcowl".
+ * The checksum means a mistyped character fails to decode instead of paying
+ * keys nobody holds. Longer than the spec's 90-char ceiling, like Zcash
+ * unified addresses, so every decode passes an explicit no-limit.
+ */
 export function encodePaymentAddress(mpk: bigint, viewPubHex: string): string {
-  const mpkHex = fieldToHex(mpk).slice(2); // 64 chars
-  const viewHex = viewPubHex.replace(/^0x/, ""); // 66 chars (compressed)
-  return `zcowl:0x${mpkHex}${viewHex}`;
+  const bytes = hexToBytes(fieldToHex(mpk).slice(2) + viewPubHex.replace(/^0x/, ""));
+  return bech32m.encode("zcowl", bech32m.toWords(bytes), false);
 }
 
 export type PaymentAddress = { mpk: bigint; viewPubHex: string };
 
 export function decodePaymentAddress(addr: string): PaymentAddress {
-  const m = addr.trim().match(/^zcowl:0x([0-9a-fA-F]{64})([0-9a-fA-F]{66})$/);
-  if (!m) throw new Error("Invalid zcowl payment address.");
-  return { mpk: hexToField("0x" + m[1]!), viewPubHex: m[2]! };
+  const s = addr.trim();
+  // The pre-checksum zcowl:0x… form still decodes; nothing emits it anymore.
+  const legacy = s.match(/^zcowl:0x([0-9a-fA-F]{64})([0-9a-fA-F]{66})$/);
+  if (legacy) return { mpk: hexToField("0x" + legacy[1]!), viewPubHex: legacy[2]! };
+  let bytes: Uint8Array;
+  try {
+    // bech32 forbids mixed case; all-caps (QR alphanumeric mode) is one case.
+    const oneCase = s === s.toUpperCase() ? s.toLowerCase() : s;
+    const dec = bech32m.decode(oneCase as `${string}1${string}`, false);
+    if (dec.prefix !== "zcowl") throw new Error("wrong prefix");
+    bytes = bech32m.fromWords(dec.words);
+  } catch {
+    throw new Error("Invalid zcowl payment address.");
+  }
+  if (bytes.length !== 65) throw new Error("Invalid zcowl payment address.");
+  const hex = bytesToHex(bytes);
+  return { mpk: hexToField("0x" + hex.slice(0, 64)), viewPubHex: hex.slice(64) };
 }
 
 export function isPaymentAddress(s: string): boolean {
-  return /^zcowl:0x[0-9a-fA-F]{130}$/.test(s.trim());
+  try {
+    decodePaymentAddress(s);
+    return true;
+  } catch {
+    return false;
+  }
 }
