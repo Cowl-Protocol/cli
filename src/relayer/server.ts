@@ -75,21 +75,57 @@ async function feeNow(net: NetworkDef, marginPct: number, gasUnits: bigint = GAS
 }
 
 /**
+ * The venue's fee tiers, cheapest first.
+ *
+ * A pair does not live at one tier: the deepest WETH/USDG pool sits at 0.05%
+ * while a thinner token's only pool can be at 1%. Asking a single configured
+ * tier meant a token whose pool was anywhere else read as "no price at all",
+ * and the relayer refused a spend it could perfectly well have carried.
+ */
+const FEE_TIERS = [100, 500, 3000, 10000] as const;
+
+/**
  * Price `feeWei` worth of gas in `token`, by asking the venue quoter how much
  * of the token buys exactly that much WETH. The fee leg of an ERC-20 spend
  * pays in that token, so this is what makes relaying one worth the gas.
+ *
+ * The configured tier is tried first and the rest follow, cheapest onward. The
+ * cheapest quote wins: it is the pool that would really be routed through, and
+ * quoting a worse one would overcharge for gas that costs the same either way.
  */
 async function feeInToken(net: NetworkDef, token: Address, feeWei: bigint): Promise<bigint> {
   const quoter = net.contracts.quoter;
   const weth = net.contracts.weth;
   if (!quoter || !weth) throw new Error("This relayer has no price source for that token — withdraw the native coin, or drop --relay.");
-  const { result } = await publicClient(net).simulateContract({
-    address: quoter,
-    abi: QUOTER_ABI,
-    functionName: "quoteExactOutputSingle",
-    args: [{ tokenIn: token, tokenOut: weth, amount: feeWei, fee: net.contracts.feeTier ?? 3000, sqrtPriceLimitX96: 0n }],
-  });
-  return result[0];
+
+  const configured = net.contracts.feeTier;
+  const tiers = configured ? [configured, ...FEE_TIERS.filter((t) => t !== configured)] : [...FEE_TIERS];
+
+  const client = publicClient(net);
+  const quotes = await Promise.all(
+    tiers.map(async (fee) => {
+      try {
+        const { result } = await client.simulateContract({
+          address: quoter,
+          abi: QUOTER_ABI,
+          functionName: "quoteExactOutputSingle",
+          args: [{ tokenIn: token, tokenOut: weth, amount: feeWei, fee, sqrtPriceLimitX96: 0n }],
+        });
+        return result[0] > 0n ? result[0] : null;
+      } catch {
+        // No pool at this tier, which is the common case and not an error.
+        return null;
+      }
+    }),
+  );
+
+  const priced = quotes.filter((q): q is bigint => q !== null);
+  if (priced.length === 0) {
+    throw new Error(
+      "No pool on this venue prices that token against WETH, so its fee cannot be charged — withdraw the native coin, or submit it yourself.",
+    );
+  }
+  return priced.reduce((best, q) => (q < best ? q : best));
 }
 
 function send(res: ServerResponse, status: number, body: unknown): void {
