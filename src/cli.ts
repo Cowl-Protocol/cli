@@ -66,6 +66,7 @@ import {
   decodePaymentAddress,
   isPaymentAddress,
   SHIELDED_SIGN_MESSAGE,
+  type AccountSpace,
   type ShieldedKeys,
 } from "./shielded/keys.js";
 import { tokenToField, tokenLabel } from "./shielded/note.js";
@@ -219,8 +220,6 @@ async function askNewPassphrase(message: string): Promise<string> {
  * Memoised because several commands need the keys more than once and each
  * derivation costs the user another passphrase prompt.
  */
-let keysOnce: Promise<ShieldedKeys> | null = null;
-
 /**
  * Every path that touches notes derives through here.
  *
@@ -236,10 +235,36 @@ async function keysFromPrivateKey(pk: string): Promise<ShieldedKeys> {
   return deriveShieldedKeysFromSignature(signature);
 }
 
-async function shieldedKeys(): Promise<ShieldedKeys> {
+/**
+ * Both books this wallet owns, from one passphrase.
+ *
+ * Reading is not spending: a balance can show every account at once, and it
+ * should, because a note nobody looks at is a note the owner believes is lost.
+ * Spending still picks one — a join-split proves against a single spending key,
+ * so it can only ever move one book's notes.
+ */
+let accountsOnce: Promise<{ key: ShieldedKeys; sig: ShieldedKeys }> | null = null;
+
+async function shieldedAccounts(): Promise<{ key: ShieldedKeys; sig: ShieldedKeys }> {
   requireWallet();
-  keysOnce ??= askPassphrase().then((pass) => keysFromPrivateKey(exportPrivateKey(pass)));
-  return keysOnce;
+  accountsOnce ??= askPassphrase().then(async (pass) => {
+    const pk = exportPrivateKey(pass);
+    const signature = await privateKeyToAccount(pk as `0x${string}`).signMessage({
+      message: SHIELDED_SIGN_MESSAGE,
+    });
+    return { key: deriveShieldedKeys(pk), sig: deriveShieldedKeysFromSignature(signature) };
+  });
+  return accountsOnce;
+}
+
+async function shieldedKeys(): Promise<ShieldedKeys> {
+  const both = await shieldedAccounts();
+  return loadConfig().shieldedAccount === "sig-v1" ? both.sig : both.key;
+}
+
+/** How a book names itself on screen, and where its notes come from. */
+function accountLabel(space: AccountSpace): string {
+  return space === "sig-v1" ? "app account" : "terminal account";
 }
 
 /**
@@ -766,26 +791,43 @@ program
 
     if (opts.shielded) {
       const sym = net.currency.symbol;
-      const keys = await shieldedKeys();
+      const accounts = await shieldedAccounts();
       const sync = await syncPoolQuietly(net, json);
-      const bal = poolBalance(net.key, keys);
-      // Resolve each token to its real symbol and decimals — a traded ERC-20
-      // shows up as "USDG 0.1", not a hex address at eighteen decimals.
-      const lines = await Promise.all(
-        bal.map(async (b) => {
-          const meta = await shieldedTokenDisplay(net, b.token, sym);
-          return { label: meta.label, amount: formatUnits(b.amount, meta.decimals), notes: b.notes };
-        }),
+      const spending = loadConfig().shieldedAccount ?? "key";
+      // Both books, same reason as the portfolio: a balance that hides one of
+      // them is how a real holding comes to look like nothing.
+      const books = await Promise.all(
+        [accounts.key, accounts.sig].map(async (acct) => ({
+          account: acct.space,
+          // Resolve each token to its real symbol and decimals — a traded ERC-20
+          // shows up as "USDG 0.1", not a hex address at eighteen decimals.
+          lines: await Promise.all(
+            poolBalance(net.key, acct).map(async (b) => {
+              const meta = await shieldedTokenDisplay(net, b.token, sym);
+              return { label: meta.label, amount: formatUnits(b.amount, meta.decimals), notes: b.notes };
+            }),
+          ),
+        })),
       );
+      const held = books.filter((b) => b.lines.length > 0);
       out(json, {
-        shielded: lines.map((l) => ({ token: l.label, amount: l.amount, notes: l.notes })),
+        shielded: books.flatMap((b) => b.lines.map((l) => ({ account: b.account, token: l.label, amount: l.amount, notes: l.notes }))),
+        accounts: books.map((b) => ({ account: b.account, spends: b.account === spending })),
         ...(sync ? { pool: { leaves: sync.totalLeaves, root: sync.root } } : {}),
       }, () => {
         heading("Shielded balance");
-        if (lines.length === 0) {
+        if (held.length === 0) {
           console.log(`  ${dim("Empty. Fund it with")} ${dim("cowl shield <amount>")}`);
         } else {
-          for (const l of lines) row(l.label, `${bold(l.amount)} ${muted(`· ${l.notes} note${l.notes === 1 ? "" : "s"}`)}`);
+          for (const b of held) {
+            // Only name the account when there is more than one to tell apart.
+            if (held.length > 1) {
+              console.log(
+                `  ${muted(accountLabel(b.account))}${b.account === spending ? ` ${dim("· spends from here")}` : ""}`,
+              );
+            }
+            for (const l of b.lines) row(l.label, `${bold(l.amount)} ${muted(`· ${l.notes} note${l.notes === 1 ? "" : "s"}`)}`);
+          }
         }
         localNotice(net, "view");
       });
@@ -1825,16 +1867,25 @@ program
   .option("--deep", "replay the pool's whole on-chain history and repair any local divergence")
   .action(async (opts: { deep?: boolean }) => {
     const { net, json } = ctx();
-    const keys = await shieldedKeys();
+    const accounts = await shieldedAccounts();
     // The everyday scan rides the cursor — cheap, and enough to pick up new leaves
     // and adopt pending deposits. --deep is the repair path: replay everything from
     // the deploy block and heal divergence the incremental pass cannot see. It
     // costs O(chain age), which is exactly why it is a flag and not the default.
     const sync = await syncPoolQuietly(net, json, { full: !!opts.deep });
-    const { discovered } = poolScan(net.key, keys);
-    out(json, { discovered, ...(sync ? { resynced: sync.resynced } : {}) }, () => {
+    // Scan both books. A payment lands in whichever account its sender addressed,
+    // and scanning only the one that spends leaves the other's arrivals unseen.
+    const found = [accounts.key, accounts.sig].map((acct) => ({
+      account: acct.space,
+      discovered: poolScan(net.key, acct).discovered,
+    }));
+    const discovered = found.reduce((s, f) => s + f.discovered, 0);
+    out(json, { discovered, accounts: found, ...(sync ? { resynced: sync.resynced } : {}) }, () => {
       if (sync?.resynced) ok("Local pool state had drifted from the chain — repaired.");
       ok(discovered > 0 ? `Found ${bold(String(discovered))} new note${discovered === 1 ? "" : "s"}.` : "No new notes.");
+      for (const f of found) {
+        if (f.discovered > 0) row(accountLabel(f.account), muted(`${f.discovered} new`));
+      }
     });
   });
 
@@ -1930,7 +1981,7 @@ program
     const showShielded = !(opts.public && !opts.shielded);
 
     const address = requireWallet();
-    const keys = showShielded ? await shieldedKeys() : null;
+    const accounts = showShielded ? await shieldedAccounts() : null;
 
     // ---- public (on-chain) ----
     let publicRows: PortfolioRow[] = [];
@@ -1964,20 +2015,29 @@ program
     }
 
     // ---- shielded (notes, synced with the pool contract where one exists) ----
-    let shieldedRows: PortfolioRow[] = [];
-    if (showShielded && keys) {
+    //
+    // Both books are read, not just the one that spends. One wallet can hold
+    // notes under either account and the owner has no way to tell from outside
+    // which; showing only the configured one is how a real balance comes to
+    // read as empty. The pool is shared, so one sync serves both scans.
+    const books: { space: AccountSpace; rows: PortfolioRow[] }[] = [];
+    if (showShielded && accounts) {
       await syncPoolQuietly(net, json);
-      shieldedRows = await Promise.all(
-        poolBalance(net.key, keys).map(async (b) => {
-          const meta = await shieldedTokenDisplay(net, b.token, sym);
-          // The portfolio prices and prints everything at 18 decimals, so a
-          // 6-decimal token's units scale up to that before valuation.
-          const amountWad =
-            meta.decimals < 18 ? b.amount * 10n ** BigInt(18 - meta.decimals) : b.amount;
-          return { symbol: meta.label, amount: amountWad, value: valueOf(meta.label, amountWad), notes: b.notes };
-        }),
-      );
+      for (const acct of [accounts.key, accounts.sig]) {
+        const rows = await Promise.all(
+          poolBalance(net.key, acct).map(async (b) => {
+            const meta = await shieldedTokenDisplay(net, b.token, sym);
+            // The portfolio prices and prints everything at 18 decimals, so a
+            // 6-decimal token's units scale up to that before valuation.
+            const amountWad =
+              meta.decimals < 18 ? b.amount * 10n ** BigInt(18 - meta.decimals) : b.amount;
+            return { symbol: meta.label, amount: amountWad, value: valueOf(meta.label, amountWad), notes: b.notes };
+          }),
+        );
+        books.push({ space: acct.space, rows });
+      }
     }
+    const shieldedRows: PortfolioRow[] = books.flatMap((b) => b.rows);
 
     if (json) {
       const pack = (rows: PortfolioRow[]) =>
@@ -1996,7 +2056,19 @@ program
             poolDeployed: !!net.contracts.pool,
             public: showPublic ? { total: formatEther(pubTotal), positions: pack(publicRows) } : undefined,
             shielded: showShielded
-              ? { total: formatEther(shTotal), simulated: !net.contracts.pool, positions: pack(shieldedRows) }
+              ? {
+                  total: formatEther(shTotal),
+                  simulated: !net.contracts.pool,
+                  positions: pack(shieldedRows),
+                  // Which account each holding sits under, since only one of
+                  // them can spend and a reader has to be able to tell.
+                  accounts: books.map((b) => ({
+                    account: b.space,
+                    spends: b.space === (loadConfig().shieldedAccount ?? "key"),
+                    total: formatEther(b.rows.reduce((s, r) => s + (r.value ?? 0n), 0n)),
+                    positions: pack(b.rows),
+                  })),
+                }
               : undefined,
             // Only one book once the pool exists; before that, summing double counts.
             total: net.contracts.pool ? formatEther(pubTotal + shTotal) : null,
@@ -2019,12 +2091,33 @@ program
       );
     }
     if (showShielded) {
-      shTotal = renderSection(
-        "Shielded",
-        net.contracts.pool ? "private, notes synced with the on-chain pool" : "private, computed from your notes",
-        shieldedRows,
-        "Empty. Fund it with cowl shield <amount> [token]",
-      );
+      const source = net.contracts.pool
+        ? "private, notes synced with the on-chain pool"
+        : "private, computed from your notes";
+      const spending = loadConfig().shieldedAccount ?? "key";
+      // A book with nothing in it is noise; only name the accounts that hold
+      // something. When neither does, one empty section still says where to
+      // start — and names the account a deposit would land in.
+      const held = books.filter((b) => b.rows.length > 0);
+      if (held.length === 0) {
+        shTotal = renderSection(
+          `Shielded · ${accountLabel(spending)}`,
+          source,
+          [],
+          "Empty. Fund it with cowl shield <amount> [token]",
+        );
+      } else {
+        for (const b of held) {
+          shTotal += renderSection(
+            `Shielded · ${accountLabel(b.space)}`,
+            b.space === spending
+              ? `${source} · spends from here`
+              : `${source} · read-only here · cowl config set shieldedAccount ${b.space}`,
+            b.rows,
+            "",
+          );
+        }
+      }
     }
 
     if (showPublic && showShielded) {

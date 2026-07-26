@@ -229,13 +229,16 @@ wallet hands a web page that — so it seeds them from a **signature** over a
 fixed message instead. Same formulas, different seed, so one wallet ends up
 owning two separate books of notes.
 
-The CLI holds the private key, so it can produce that signature itself and open
-the app's account too:
+**You never have to choose to see them.** `cowl portfolio`, `cowl balance
+--shielded` and `cowl scan` read both books and label each one, so a holding is
+never hidden behind a setting. Spending is the part that picks: a join-split
+proves against one spending key, so it moves one book's notes.
 
 ```bash
-cowl config set shieldedAccount sig-v1   # operate the same book as app.cowlprotocol.com
-cowl config set shieldedAccount key      # back to the terminal's own book
-cowl receive                             # prints the address and names the account
+cowl portfolio                           # both books, each named
+cowl config set shieldedAccount sig-v1   # spend from the app's book
+cowl config set shieldedAccount key      # spend from the terminal's own
+cowl receive                             # the address, and which account it belongs to
 ```
 
 Notes are filed per account, so switching never mixes the two. Before moving
