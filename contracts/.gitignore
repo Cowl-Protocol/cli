@@ -1,3 +1,10 @@
 out/
 cache/
 broadcast/*/*/dry-run/
+
+# Mainnet deploy runbooks. No key material in them, only public addresses, but
+# they are operational: the steps that put contracts on a live chain, meant to
+# be run by whoever holds the deployer keystore and nobody else. Kept local so
+# they stop showing up as work waiting to be committed.
+deploy-mainnet.sh
+deploy-adapter-mainnet.sh
