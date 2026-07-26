@@ -44,11 +44,22 @@ const QUOTER_ABI = [
   },
 ] as const;
 
-/** Observed spend gas is ~4.6M; quote a spend's worth with headroom. */
-const GAS_PER_SPEND = 5_000_000n;
+/**
+ * A spend's gas, measured rather than rounded up.
+ *
+ * Every spend the mainnet pool has settled burned between 4,365,268 and
+ * 4,376,528 — a spread of a quarter of a percent, because the circuit does the
+ * same work every time. Quoting five million on top of that was a second markup
+ * nobody could see: the margin below says 25%, but the bill came to 43%. This
+ * sits just above the highest ever observed, and the margin covers the rest.
+ */
+const GAS_PER_SPEND = 4_400_000n;
 
 /** An atomic trade verifies two proofs and swaps — observed ~13.8M. */
 const GAS_PER_TRADE = 15_000_000n;
+
+/** Below this many spends' worth of gas, every quote says so on the console. */
+const LOW_FLOAT_SPENDS = 20n;
 
 /** Spends waiting in line before new ones get a 429. Spends serialize on the
  * pool root, so a long queue only grows stale — better to say busy early. */
@@ -184,6 +195,29 @@ export function startRelayServer(
           const token = tokenParam && tokenParam !== "0" ? (tokenParam as Address) : null;
           if (token && !/^0x[0-9a-fA-F]{40}$/.test(token)) throw new Error("Bad token address.");
           const fee = token ? await feeInToken(net, token, feeWei) : feeWei;
+
+          // A relayer that cannot pay for the spend it is quoting would take the
+          // job and then fail to submit it. Declining here instead lets the
+          // caller fall back to its own wallet while it still can.
+          //
+          // The float only refills for native-coin spends: an ERC-20 fee arrives
+          // as that token and nothing converts it back to gas yet, so this is
+          // the line that says when that day has come.
+          const float = await publicClient(net).getBalance({ address: account.address });
+          const spendsLeft = feeWei > 0n ? float / feeWei : 0n;
+          if (float < feeWei) {
+            onEvent({ kind: "rejected", reason: "out of gas float" });
+            send(res, 503, {
+              error: "This relayer is out of gas and cannot carry a spend right now.",
+            });
+            return;
+          }
+          if (spendsLeft <= LOW_FLOAT_SPENDS) {
+            console.warn(
+              `  relayer float is low: ${float} wei, about ${spendsLeft} spend${spendsLeft === 1n ? "" : "s"} left`,
+            );
+          }
+
           onEvent({ kind: "quote", feeWei });
           send(res, 200, {
             relayer: account.address,
@@ -192,6 +226,10 @@ export function startRelayServer(
             fee: fee.toString(),
             chainId: net.chainId,
             pool,
+            // Public anyway, and the number anyone routing through this relayer
+            // wants before they depend on it.
+            floatWei: float.toString(),
+            spendsLeft: spendsLeft.toString(),
           });
           return;
         }
