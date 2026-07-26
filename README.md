@@ -103,7 +103,7 @@ broadcast a transaction.
 | `cowl init` | guided setup: wallet, view key, network |
 | `cowl wallet` | new / import / export / address / passphrase |
 | `cowl address` | fresh one-time stealth address |
-| `cowl receive` | your `zcowl1…` shielded payment address |
+| `cowl receive` | your `zcowl1…` shielded payment address (`--qr` to scan it) |
 | `cowl viewkey` | selective-disclosure view keys |
 | `cowl backup` / `cowl restore` | encrypted wallet bundle, out and back |
 | `cowl doctor` | audit file permissions and setup |
@@ -239,6 +239,7 @@ cowl portfolio                           # both books, each named
 cowl config set shieldedAccount sig-v1   # spend from the app's book
 cowl config set shieldedAccount key      # spend from the terminal's own
 cowl receive                             # the address, and which account it belongs to
+cowl receive --qr                        # the same address, as a QR code to scan
 ```
 
 Notes are filed per account, so switching never mixes the two. Before moving

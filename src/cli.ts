@@ -1842,11 +1842,21 @@ relay
 program
   .command("receive")
   .description("show your shielded payment address (share it to be paid privately)")
-  .action(async () => {
+  .option("--qr", "print the address as a QR code for a phone to scan")
+  .action(async (opts: { qr?: boolean }) => {
     const { json } = ctx();
     const keys = await shieldedKeys();
+    // Encoding is deferred so a plain `cowl receive` never pays for it.
+    const qr = opts.qr
+      ? // Upper case is what the bech32 spec asks for in a QR: it encodes in
+        // alphanumeric mode rather than byte mode, which is 41 modules across
+        // instead of 49. Every decoder here accepts either case.
+        ((await import("qr")).default(keys.paymentAddress.toUpperCase(), "term") as string)
+      : null;
+
     out(json, { paymentAddress: keys.paymentAddress, account: keys.space }, () => {
       heading("Shielded payment address");
+      if (qr) console.log(`\n${qr}`);
       console.log(`  ${acid(keys.paymentAddress)}`);
       console.log(`  ${muted("Share this. Payments to it land in your shielded balance, unlinkable on-chain.")}`);
       // One wallet holds two of these. Naming which one is on screen is the

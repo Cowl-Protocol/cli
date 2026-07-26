@@ -55,6 +55,7 @@
     "@zkpassport/poseidon2": "^0.6.2",
     "commander": "^12.1.0",
     "picocolors": "^1.0.1",
+    "qr": "^0.6.0",
     "viem": "^2.21.0"
   },
   "devDependencies": {
