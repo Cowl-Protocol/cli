@@ -296,9 +296,17 @@ function planInputs(inputs: StoredNote[]): SpendPlan["inputs"] {
 
 /**
  * Plan a private send: `value` to the recipient, change back to you, no public
- * leg. Relayed, it is the most private operation the pool has — the sender's
- * wallet appears nowhere on chain. The only public artifact is the relayer's
- * `fee` payout; the amount, the parties, and both output notes stay hidden.
+ * leg. The amount, the parties, and both output notes stay hidden either way.
+ *
+ * What differs is who pays the gas, and the two choices hide different things.
+ * Paid from your own wallet, nothing leaves the pool at all: the circuit ties
+ * `public_token` to the notes' asset only when something does —
+ * `(public_value + fee) * (public_token - token) == 0` — so the field stays zero
+ * and the calldata does not even say which token moved. Relayed, the sender's
+ * wallet appears nowhere on chain, but the fee is paid out of these same notes,
+ * which pins that field to the real asset and posts a transfer of it to the
+ * relayer. One hides the asset, the other hides you; the constraint above is
+ * why no spend can do both.
  */
 export function planSend(
   pool: Pool,
@@ -323,7 +331,8 @@ export function planSend(
       inputs: planInputs(inputs),
       outputs: [outParts(out0), outParts(out1)],
       leaves: pool.commitments.map(hexToField),
-      publicToken: token,
+      // Zero unless a fee forces it — see above.
+      publicToken: fee === 0n ? 0n : token,
       publicValue: 0n,
       fee,
       recipient: 0n,
@@ -370,7 +379,9 @@ export function planConsolidate(
       inputs: planInputs([a, b]),
       outputs: [outParts(out0), outParts(out1)],
       leaves: pool.commitments.map(hexToField),
-      publicToken: token,
+      // A merge never has a public leg, so this field is free — and naming the
+      // asset here would say which token a book is fragmented in.
+      publicToken: 0n,
       publicValue: 0n,
       fee: 0n,
       recipient: 0n,

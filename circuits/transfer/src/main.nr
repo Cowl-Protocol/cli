@@ -254,6 +254,23 @@ fn send_cannot_mint_value() {
     run(Case { sk: 7, token: 0, in_value: 100, out_value: [61, 40], public_token: 0, public_value: 0, fee: 0 });
 }
 
+/// The point of leaving `public_token` unconstrained: a pure send may set it to
+/// zero and say nothing about which asset moved. Every test above sends a note
+/// whose token is already 0, so none of them could tell a free field from a
+/// forced one — this one holds a real asset and still names nothing.
+#[test]
+fn send_need_not_name_its_asset() {
+    run(Case { sk: 7, token: 0x1111, in_value: 100, out_value: [60, 40], public_token: 0, public_value: 0, fee: 0 });
+}
+
+/// And the price of paying a relayer out of the same notes: the moment a fee
+/// leaves, the asset is pinned to what the notes hold, so a gasless send cannot
+/// also be an anonymous one. This is the constraint, not a client choice.
+#[test(should_fail_with = "public leg does not match the note asset")]
+fn a_paid_send_cannot_hide_its_asset() {
+    run(Case { sk: 7, token: 0x1111, in_value: 100, out_value: [60, 35], public_token: 0, public_value: 0, fee: 5 });
+}
+
 #[test]
 fn unshield_pays_out_and_keeps_change() {
     run(Case { sk: 7, token: 0x1111, in_value: 100, out_value: [30, 0], public_token: 0x1111, public_value: 65, fee: 5 });
