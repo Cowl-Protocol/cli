@@ -268,18 +268,64 @@ export type PlannedSpend = {
 };
 
 /** Pick one or two unspent notes of `token` covering `need`; a join-split takes at most two. */
+/**
+ * Which one or two notes a spend reads. A join-split takes at most two.
+ *
+ * "The smallest single note that covers it, so the larger notes stay whole" was
+ * the old rule, and it does the opposite of what it says on a consolidated book:
+ * when no small note covers the amount on its own, the only single note that
+ * does is the big one merging just built. A payment of 1.5M out of a 4M note
+ * leaves 2.5M as change and drops the ceiling from 5M to 3.5M, where two 1M
+ * notes would have covered it and left the 4M standing. The ceiling decides
+ * whether the next payment needs merging at all, so spending it down means
+ * paying to build it again.
+ *
+ * Two inputs cost exactly what one costs — same circuit, same proof, same gas —
+ * so there is nothing traded away by choosing well. This takes whichever valid
+ * selection leaves the highest ceiling behind, breaking ties toward fewer notes
+ * left, which is the direction merging pulls anyway. Candidates are every single
+ * note that covers and every pair that does.
+ */
 function selectUpTo2(wallet: Wallet, token: bigint, need: bigint): StoredNote[] {
   const avail = wallet.notes
     .filter((n) => !n.spent && hexToField(n.token) === token)
     .sort((a, b) => (hexToField(a.value) < hexToField(b.value) ? -1 : 1)); // ascending value
-  // The smallest single note that covers it, so the larger notes stay whole.
-  const single = avail.find((n) => hexToField(n.value) >= need);
-  if (single) return [single];
-  // Otherwise the two largest — a join-split cannot consume more than two inputs.
-  const two = avail.slice(-2);
-  const twoTotal = two.reduce((s, n) => s + hexToField(n.value), 0n);
-  if (two.length === 2 && twoTotal >= need) return two;
-  const have = avail.reduce((s, n) => s + hexToField(n.value), 0n);
+  // Zero-value notes fund nothing and the circuit treats them as dummies.
+  const usable = avail.filter((n) => hexToField(n.value) > 0n);
+  const desc = [...usable].reverse();
+
+  let best: StoredNote[] | null = null;
+  let bestCeiling = -1n;
+  let bestLeft = Number.MAX_SAFE_INTEGER;
+
+  const consider = (pick: StoredNote[]) => {
+    const total = pick.reduce((s, n) => s + hexToField(n.value), 0n);
+    if (total < need) return;
+    const taken = new Set(pick.map((n) => n.leafIndex));
+    const rest: bigint[] = [];
+    for (const n of desc) {
+      if (taken.has(n.leafIndex)) continue;
+      rest.push(hexToField(n.value));
+      if (rest.length === 2) break;
+    }
+    const change = total - need;
+    const after = [...rest, ...(change > 0n ? [change] : [])].sort((a, b) => (a < b ? 1 : -1));
+    const ceiling = (after[0] ?? 0n) + (after[1] ?? 0n);
+    const left = usable.length - pick.length + (change > 0n ? 1 : 0);
+    if (ceiling > bestCeiling || (ceiling === bestCeiling && left < bestLeft)) {
+      best = pick;
+      bestCeiling = ceiling;
+      bestLeft = left;
+    }
+  };
+
+  for (let i = 0; i < usable.length; i++) {
+    consider([usable[i]!]);
+    for (let j = i + 1; j < usable.length; j++) consider([usable[i]!, usable[j]!]);
+  }
+  if (best) return best;
+
+  const have = usable.reduce((s, n) => s + hexToField(n.value), 0n);
   if (have < need) {
     throw new Error(`Insufficient shielded balance: need ${formatEther(need)}, have ${formatEther(have)}.`);
   }
