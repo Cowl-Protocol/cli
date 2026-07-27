@@ -148,6 +148,13 @@ never points users at a dead URL.
   It earns fees back on every relay.
 - **Margin**: change the take by editing `--margin` in the unit, then
   `sudo systemctl daemon-reload && sudo systemctl restart cowl-relayer`.
+- **Upgrade**: `sudo npm install -g @cowlprotocol/cli@latest`, then restart every
+  relayer unit on the box. Do this whenever a release moves the gas figures,
+  because the price a spend is quoted comes from the daemon's own copy of them —
+  a box left on an older build keeps charging the old number and nothing about a
+  successful quote says so. `npm run test:relay` from a checkout catches exactly
+  that: it derives what each live relayer is really pricing from its own quotes
+  and holds it against the shipping network table.
 - **Rotate the passphrase**: `cowl wallet passphrase` as the `cowl-relayer` user,
   update `/etc/cowl-relayer/relayer.env`, then restart.
 

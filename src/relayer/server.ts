@@ -48,16 +48,23 @@ const QUOTER_ABI = [
 /**
  * A spend's gas, measured rather than rounded up.
  *
- * Every spend the mainnet pool has settled burned between 4,365,268 and
- * 4,376,528 — a spread of a quarter of a percent, because the circuit does the
- * same work every time. Quoting five million on top of that was a second markup
- * nobody could see: the margin below says 25%, but the bill came to 43%. This
- * sits just above the highest ever observed, and the margin covers the rest.
+ * Every spend the mainnet pool has settled burned between 4,348,677 and
+ * 4,430,686 — a spread under two percent, because the circuit does the same work
+ * every time. Quoting five million on top of that was a second markup nobody
+ * could see: the margin below says 25%, but the bill came to 43%. This sits just
+ * above the highest ever observed, and the margin covers the rest.
  */
-const GAS_PER_SPEND = 4_400_000n;
+const GAS_PER_SPEND = 4_450_000n;
 
-/** An atomic trade verifies two proofs and swaps — observed ~13.8M. */
-const GAS_PER_TRADE = 15_000_000n;
+/**
+ * An atomic trade's gas, which depends on the venue rather than the circuit, so
+ * each network carries its own figure. A network that has never been measured
+ * falls back to the slowest one known rather than under-quoting its own relayer
+ * into paying the difference.
+ */
+function gasPerTrade(net: NetworkDef): bigint {
+  return net.tradeGas ?? 15_000_000n;
+}
 
 /** Below this many spends' worth of gas, every quote says so on the console. */
 const LOW_FLOAT_SPENDS = 20n;
@@ -241,7 +248,7 @@ export function startRelayServer(
         const url = new URL(req.url ?? "/", "http://relay");
         if (req.method === "GET" && url.pathname === "/quote") {
           // ?op=trade sizes the quote for an atomic trade's gas instead of a spend's.
-          const gasUnits = url.searchParams.get("op") === "trade" ? GAS_PER_TRADE : GAS_PER_SPEND;
+          const gasUnits = url.searchParams.get("op") === "trade" ? gasPerTrade(net) : GAS_PER_SPEND;
           const feeWei = await feeNow(net, opts.marginPct, gasUnits);
           // ?token=0x… prices the fee in that ERC-20 via the venue quoter; the
           // fee leg of a spend pays in the spend's own token.
@@ -378,7 +385,7 @@ export function startRelayServer(
           if (t.spend.recipient !== BigInt(adapter)) throw new Error("Trade spend does not pay the adapter.");
           if (t.spend.relayer !== BigInt(account.address)) throw new Error("Spend does not pay this relayer.");
           if (t.spend.token > (1n << 160n) - 1n) throw new Error("Bad token in spend.");
-          const tradeFloorWei = await feeNow(net, 0, GAS_PER_TRADE);
+          const tradeFloorWei = await feeNow(net, 0, gasPerTrade(net));
           const tradeFloor =
             t.spend.token === 0n
               ? tradeFloorWei

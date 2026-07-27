@@ -46,6 +46,17 @@ export type NetworkDef = {
    * fee before anything signs. Set only where a relayer is actually hosted.
    */
   defaultRelay?: string;
+  /**
+   * Gas an atomic private trade burns here, for the relayer's `?op=trade` quote.
+   *
+   * A trade is two proof verifications and a swap, and the verifications are
+   * almost all of it — so the figure tracks this network's venue rather than the
+   * circuit. Mainnet's real Uniswap V3 leg costs a couple hundred thousand on top
+   * of the proofs; the testnet stand-ins cost far more. One constant could only
+   * ever be right for one of them, which is why it lives per network. A spend's
+   * gas needs no such field: the circuit does the same work everywhere.
+   */
+  tradeGas?: bigint;
   explorer: string;
   currency: { name: string; symbol: string; decimals: number };
   testnet: boolean;
@@ -70,6 +81,9 @@ export const NETWORKS: Record<string, NetworkDef> = {
       "https://rpc.testnet.chain.robinhood.com",
     ],
     defaultRelay: "https://relay.cowlprotocol.com",
+    // The V3-interface stand-ins below are not cheap: a trade through them was
+    // measured at ~13.8M when the adapter first landed.
+    tradeGas: 15_000_000n,
     explorer: "https://explorer.testnet.chain.robinhood.com",
     currency: { name: "Ether", symbol: "ETH", decimals: 18 },
     testnet: true,
@@ -105,6 +119,13 @@ export const NETWORKS: Record<string, NetworkDef> = {
       // unreachable from some regions, so it sits last rather than first.
       "https://rpc.mainnet.chain.robinhood.com",
     ],
+    defaultRelay: "https://relay.cowlprotocol.com/mainnet",
+    // The first real-money trade burned 8,599,108, which is very nearly a spend
+    // (4.43M worst case) plus a shield (4.13M worst case) — the pons swap leg is
+    // a couple hundred thousand on top of two proof verifications. This clears
+    // the worst observed pair with room for a deeper fill, and the relayer's
+    // margin covers the rest.
+    tradeGas: 9_000_000n,
     explorer: "https://robinhoodchain.blockscout.com",
     currency: { name: "Ether", symbol: "ETH", decimals: 18 },
     testnet: false,
