@@ -348,11 +348,15 @@ export function planSend(
 }
 
 /**
- * Plan one consolidation step: the two smallest live notes of `token` merge
- * into a single note back to yourself. A join-split takes at most two inputs,
- * so a wallet fragmented across many small notes repeats this until any amount
- * it wants to spend fits in two. Pure internal op — nothing surfaces on chain
- * beyond the usual two commitments and two nullifiers.
+ * Plan one consolidation step: the two largest live notes of `token` merge into
+ * a single note back to yourself. A join-split takes at most two inputs, so a
+ * wallet fragmented across many small notes repeats this until any amount it
+ * wants to spend fits in two.
+ *
+ * Relayed, it carries `fee` for `relayer` out of the pair being merged, which
+ * is value leaving: the merged note comes out that much smaller and the asset
+ * is named. Self-paid, nothing surfaces beyond two commitments and two
+ * nullifiers. Same trade a relayed send makes — see planSend.
  */
 export function planConsolidate(
   pool: Pool,
@@ -360,16 +364,31 @@ export function planConsolidate(
   keys: ShieldedKeys,
   token: bigint,
   chainId: bigint,
+  fee: bigint = 0n,
+  relayer: bigint = 0n,
 ): PlannedSpend {
   const avail = wallet.notes
     .filter((n) => !n.spent && hexToField(n.token) === token && hexToField(n.value) > 0n)
-    .sort((a, b) => (hexToField(a.value) < hexToField(b.value) ? -1 : 1));
+    .sort((a, b) => (hexToField(a.value) < hexToField(b.value) ? 1 : -1));
   if (avail.length < 3) {
     throw new Error("Nothing to consolidate — two notes or fewer already spend together.");
   }
+  // The two LARGEST, not the two smallest.
+  //
+  // What limits a spend is the sum of the top two notes, so that is the number
+  // a merge has to move. Combining the two smallest builds a pile from the
+  // bottom and can leave the top untouched for a whole round: on a book of
+  // seven 100k notes and one 50k, reaching 500k took five rounds and the fourth
+  // raised the ceiling by nothing at all. Taking the top two lifts it every
+  // time, and the same book gets there in three.
   const [a, b] = [avail[0]!, avail[1]!];
   const total = hexToField(a.value) + hexToField(b.value);
-  const out0: Note = { value: total, token, mpk: keys.mpk, blinding: randomField() };
+  // A relayer paid more than the two notes hold would need a third input the
+  // circuit does not have. Caught here rather than as an unsatisfiable witness.
+  if (total <= fee) {
+    throw new Error("These notes cannot cover the relayer's fee. Merge them yourself, or shield more.");
+  }
+  const out0: Note = { value: total - fee, token, mpk: keys.mpk, blinding: randomField() };
   const out1: Note = { value: 0n, token, mpk: keys.mpk, blinding: randomField() };
   return {
     plan: {
@@ -379,13 +398,13 @@ export function planConsolidate(
       inputs: planInputs([a, b]),
       outputs: [outParts(out0), outParts(out1)],
       leaves: pool.commitments.map(hexToField),
-      // A merge never has a public leg, so this field is free — and naming the
-      // asset here would say which token a book is fragmented in.
-      publicToken: 0n,
+      // Free while nothing leaves — naming the asset would say which token a
+      // book is fragmented in. A fee is something leaving, and pins it.
+      publicToken: fee === 0n ? 0n : token,
       publicValue: 0n,
-      fee: 0n,
+      fee,
       recipient: 0n,
-      relayer: 0n,
+      relayer,
       chainId,
     },
     outputs: [

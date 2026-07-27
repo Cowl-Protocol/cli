@@ -331,13 +331,20 @@ cowl relay quote https://relay.cowlprotocol.com    # ask a relayer its price per
 ### Consolidation
 
 A join-split spends at most two notes at once, so a balance scattered across many small notes caps
-what a single transfer can move. `cowl consolidate [token]` merges the two smallest each round until
+what a single transfer can move. `cowl consolidate [token]` merges the two largest each round until
 your balance sits in one — `n` notes settle in `n − 2` private spends, each proven on your machine
-like any other.
+like any other. Taking the top two lifts the ceiling every round, which is the number that decides
+what your next send can carry.
+
+Gasless by default, like every other spend. It matters more here than it looks: merging is what you
+do just before a private send, so rounds paid from your own wallet would put it on chain moments
+before the relayed spend they were clearing the way for. Each round's fee comes out of the pair
+being merged.
 
 ```bash
-cowl consolidate                # merge your native-token notes
+cowl consolidate                # merge your native-token notes, through the default relayer
 cowl consolidate 0x…            # merge a specific ERC-20's notes
+cowl consolidate --self         # submit the rounds yourself
 ```
 
 ### Private trades

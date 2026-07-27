@@ -1740,7 +1740,9 @@ program
   .command("consolidate")
   .description("merge fragmented shielded notes so any amount spends in one join-split")
   .argument("[token]", "native symbol (default) or an ERC-20 address")
-  .action(async (token: string | undefined) => {
+  .option("--relay <url>", "route the rounds through a specific relayer instead of the network default")
+  .option("--self", "submit the rounds yourself, skipping the default relayer")
+  .action(async (token: string | undefined, opts: { relay?: string; self?: boolean }) => {
     const { net } = ctx();
     const sym = net.currency.symbol;
     const tokenField = tokenToField(token ?? sym, sym);
@@ -1764,6 +1766,38 @@ program
       return;
     }
     const rounds = live.length - 2;
+
+    // Relayed like every other spend, and here it also keeps the preparation
+    // from giving away the payment: merging is what precedes a private send, so
+    // self-paid rounds would put this wallet on chain moments before the relayed
+    // spend they were clearing the way for. The fee comes out of the pair being
+    // merged, one per round, all bound into each proof before it leaves.
+    const relayUrl = resolveRelay(net, opts);
+    const relayDefaulted = Boolean(relayUrl && !opts.relay && !opts.self);
+    let quote: RelayQuote | null = null;
+    if (relayUrl) {
+      const tokenAddr =
+        tokenField === 0n ? undefined : (`0x${tokenField.toString(16).padStart(40, "0")}` as `0x${string}`);
+      quote = await fetchQuote(relayUrl, tokenAddr).catch((e) =>
+        die(
+          `Couldn't reach the relayer at ${relayUrl}.`,
+          `${(e as Error).message.split("\n")[0]} — retry, or add --self to submit them yourself.`,
+        ),
+      );
+      if (quote.chainId !== net.chainId) {
+        die(`That relayer serves chain ${quote.chainId}, not ${net.chainId}.`);
+      }
+    }
+    const relayerField = quote ? BigInt(quote.relayer) : 0n;
+    const feePerRound = quote ? quote.fee : 0n;
+    // Only needed to print the fee at the right scale; the plan itself works in
+    // base units throughout.
+    const decimals =
+      tokenField === 0n
+        ? net.currency.decimals
+        : (await tokenMeta(net, `0x${tokenField.toString(16).padStart(40, "0")}` as Address).catch(() => null))
+            ?.decimals ?? 18;
+
     await spendOnChain(
       net,
       "Consolidate",
@@ -1771,12 +1805,22 @@ program
         row("Token", muted(label));
         row("Notes", `${bold(String(live.length))} ${muted("→ 2")}`);
         row("Spends", muted(String(rounds)));
+        if (quote) {
+          row("Relayer", muted(quote.relayer + (relayDefaulted ? " · default" : "")));
+          row(
+            "Fee",
+            muted(
+              `${formatUnits(feePerRound, decimals)} ${label} × ${rounds} = ${formatUnits(feePerRound * BigInt(rounds), decimals)} ${label}, paid from the notes being merged`,
+            ),
+          );
+        }
       },
       Array.from(
         { length: rounds },
         () => (pool: Pool, w: Wallet, keys: ShieldedKeys) =>
-          planConsolidate(pool, w, keys, tokenField, BigInt(net.chainId)),
+          planConsolidate(pool, w, keys, tokenField, BigInt(net.chainId), feePerRound, relayerField),
       ),
+      relayUrl,
     );
   });
 
