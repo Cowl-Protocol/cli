@@ -1102,6 +1102,7 @@ program
       // Where the pool is live the send is a real join-split; elsewhere it is the sim.
       if (net.contracts.pool) {
         const { value, decimals, label } = await resolveBoundaryAmount(net, amount, tokenField, sym);
+        await enforceBetaCap(net, "private send", tokenField, value, decimals, label);
         // Relayed, the sender's wallet appears nowhere: the relayer submits and
         // takes its fee from the same shielded notes, bound into the proof. The
         // fee payout is the one public artifact — it names the token, never the
@@ -1274,6 +1275,31 @@ async function resolveBoundaryAmount(
 }
 
 /**
+ * Refuse a deposit or private send worth more than the beta cap.
+ *
+ * The number comes from the chain (venue quoter, explorer fallback) and the
+ * check runs before anything proves or signs. A token nothing can price passes
+ * rather than being guessed at, and testnets always pass — the cap guards real
+ * dollars. Withdrawals never come here: the way out stays open at any size.
+ */
+async function enforceBetaCap(
+  net: NetworkDef,
+  kind: "deposit" | "private send",
+  tokenField: bigint,
+  value: bigint,
+  decimals: number,
+  label: string,
+): Promise<void> {
+  const { BETA_USD_CAP, boundaryWorthUsd } = await import("./shielded/betacap.js");
+  const worth = await boundaryWorthUsd(net, tokenField, value, decimals);
+  if (worth === null || worth <= BETA_USD_CAP) return;
+  die(
+    `${formatUnits(value, decimals)} ${label} is about $${worth.toFixed(2)} — the beta cap is $${BETA_USD_CAP} per ${kind}.`,
+    `The cap keeps any one mistake small while the pool is in beta. Withdrawals are never capped, so anything already shielded can always come out.`,
+  );
+}
+
+/**
  * How a shielded token renders: the native symbol, a sim market symbol, or a
  * real ERC-20's own symbol and decimals read from its contract.
  */
@@ -1417,6 +1443,10 @@ async function shieldOnChain(
   // Resolve what is actually being deposited before asking for a passphrase or
   // proving anything.
   const { value, decimals, label } = await resolveBoundaryAmount(net, amount, tokenField, sym);
+
+  // The cap reads the command's whole amount, not the per-part slices below —
+  // twelve deposits from one keystroke are still one mistake.
+  await enforceBetaCap(net, "deposit", tokenField, value, decimals, label);
 
   const { parts, dust } = boundaryParts(value, decimals, label, exact);
 
