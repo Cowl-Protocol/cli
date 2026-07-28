@@ -1,0 +1,89 @@
+'forge clean' running (wd: /private/var/folders/0b/wp2plrm16cx83q02ffz68rmh0000gn/T/tmp.0gdjaBvtw0)
+'forge config --json' running
+'forge build --build-info --skip ./test/** ./script/** --force' running (wd: /private/var/folders/0b/wp2plrm16cx83q02ffz68rmh0000gn/T/tmp.0gdjaBvtw0)
+
+Detector: arbitrary-send-eth
+CowlTradeAdapter.trade(CowlTradeAdapter.TradeParams) (src/CowlTradeAdapter.sol#132-204) sends eth to arbitrary user
+	Dangerous calls:
+	- IWETH(weth).deposit{value: maxIn}() (src/CowlTradeAdapter.sol#147)
+	- (ok,None) = msg.sender.call{value: left}() (src/CowlTradeAdapter.sol#196)
+ShieldedPool._payOut(uint256,address,uint256) (src/ShieldedPool.sol#363-370) sends eth to arbitrary user
+	Dangerous calls:
+	- (ok,None) = to.call{value: amount}() (src/ShieldedPool.sol#365)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#functions-that-send-ether-to-arbitrary-destinations
+
+Detector: missing-zero-check
+CowlTradeAdapter.constructor(ShieldedPool,address,address,bool)._router (src/CowlTradeAdapter.sol#104) lacks a zero-check on :
+		- router = _router (src/CowlTradeAdapter.sol#106)
+CowlTradeAdapter.constructor(ShieldedPool,address,address,bool)._weth (src/CowlTradeAdapter.sol#104) lacks a zero-check on :
+		- weth = _weth (src/CowlTradeAdapter.sol#107)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#missing-zero-address-validation
+
+Detector: reentrancy-events
+Reentrancy in ShieldedPool.shield(uint256,uint256,bytes32,bytes32,bytes,bytes) (src/ShieldedPool.sol#225-271):
+	External calls:
+	- ! IERC20(address(uint160(token))).transferFrom(msg.sender,address(this),value) (src/ShieldedPool.sol#264)
+	Event emitted after the call(s):
+	- NoteCipher(leafIndex,ciphertext) (src/ShieldedPool.sol#270)
+	- NoteCommitted(commitment,leafIndex) (src/ShieldedPool.sol#269)
+Reentrancy in CowlTradeAdapter.trade(CowlTradeAdapter.TradeParams) (src/CowlTradeAdapter.sol#132-204):
+	External calls:
+	- pool.spend(p.spend,p.spendCiphertexts,p.spendProof) (src/CowlTradeAdapter.sol#143)
+	- IWETH(weth).deposit{value: maxIn}() (src/CowlTradeAdapter.sol#147)
+	- ! IERC20Adapter(swapIn).approve(router,maxIn) (src/CowlTradeAdapter.sol#148)
+	- ! IERC20Adapter(swapIn).approve(router,0) (src/CowlTradeAdapter.sol#173)
+	- IWETH(weth).withdraw(p.amountOut) (src/CowlTradeAdapter.sol#177)
+	- pool.shield{value: p.amountOut}(0,p.amountOut,p.shieldCommitment,p.shieldNewRoot,p.shieldCiphertext,p.shieldProof) (src/CowlTradeAdapter.sol#178-180)
+	- ! IERC20Adapter(swapOut).approve(address(pool),p.amountOut) (src/CowlTradeAdapter.sol#182)
+	- pool.shield(p.tokenOut,p.amountOut,p.shieldCommitment,p.shieldNewRoot,p.shieldCiphertext,p.shieldProof) (src/CowlTradeAdapter.sol#183-185)
+	- IWETH(weth).withdraw(left) (src/CowlTradeAdapter.sol#195)
+	- (ok,None) = msg.sender.call{value: left}() (src/CowlTradeAdapter.sol#196)
+	- ! IERC20Adapter(swapIn).transfer(msg.sender,left) (src/CowlTradeAdapter.sol#199)
+	- spent = IV3Router02(router).exactOutputSingle(IV3Router02.ExactOutputSingleParams({tokenIn:swapIn,tokenOut:swapOut,fee:p.poolFee,recipient:address(this),amountOut:p.amountOut,amountInMaximum:maxIn,sqrtPriceLimitX96:0})) (src/CowlTradeAdapter.sol#149-172)
+	- spent = IV3Router(router).exactOutputSingle(IV3Router.ExactOutputSingleParams({tokenIn:swapIn,tokenOut:swapOut,fee:p.poolFee,recipient:address(this),deadline:block.timestamp,amountOut:p.amountOut,amountInMaximum:maxIn,sqrtPriceLimitX96:0})) (src/CowlTradeAdapter.sol#149-172)
+	External calls sending eth:
+	- IWETH(weth).deposit{value: maxIn}() (src/CowlTradeAdapter.sol#147)
+	- pool.shield{value: p.amountOut}(0,p.amountOut,p.shieldCommitment,p.shieldNewRoot,p.shieldCiphertext,p.shieldProof) (src/CowlTradeAdapter.sol#178-180)
+	- (ok,None) = msg.sender.call{value: left}() (src/CowlTradeAdapter.sol#196)
+	Event emitted after the call(s):
+	- Traded(swapIn,swapOut,spent,p.amountOut) (src/CowlTradeAdapter.sol#203)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#reentrancy-vulnerabilities-4
+
+Detector: timestamp
+CowlTradeAdapter.trade(CowlTradeAdapter.TradeParams) (src/CowlTradeAdapter.sol#132-204) uses timestamp for comparisons
+	Dangerous comparisons:
+	- left != 0 (src/CowlTradeAdapter.sol#193)
+ShieldedPool.executeVerifierSwap(ShieldedPool.VerifierKind) (src/ShieldedPool.sol#191-202) uses timestamp for comparisons
+	Dangerous comparisons:
+	- block.timestamp < p.executeAfter (src/ShieldedPool.sol#194)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#block-timestamp
+
+Detector: pragma
+2 different versions of Solidity are used:
+	- Version constraint ^0.8.27 is used by:
+		-^0.8.27 (src/CowlTradeAdapter.sol#2)
+		-^0.8.27 (src/ShieldedPool.sol#2)
+	- Version constraint >=0.8.21 is used by:
+		->=0.8.21 (src/ShieldVerifier.sol#2)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#different-pragma-directives-are-used
+
+Detector: cyclomatic-complexity
+CowlTradeAdapter.trade(CowlTradeAdapter.TradeParams) (src/CowlTradeAdapter.sol#132-204) has a high cyclomatic complexity (16).
+ShieldedPool.shield(uint256,uint256,bytes32,bytes32,bytes,bytes) (src/ShieldedPool.sol#225-271) has a high cyclomatic complexity (12).
+ShieldedPool.spend(ShieldedPool.Spend,bytes[2],bytes) (src/ShieldedPool.sol#292-361) has a high cyclomatic complexity (19).
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#cyclomatic-complexity
+
+Detector: solc-version
+Version constraint >=0.8.21 contains known severe issues (https://solidity.readthedocs.io/en/latest/bugs.html)
+	- VerbatimInvalidDeduplication.
+It is used by:
+	- >=0.8.21 (src/ShieldVerifier.sol#2)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#incorrect-versions-of-solidity
+
+Detector: low-level-calls
+Low level call in CowlTradeAdapter.trade(CowlTradeAdapter.TradeParams) (src/CowlTradeAdapter.sol#132-204):
+	- (ok,None) = msg.sender.call{value: left}() (src/CowlTradeAdapter.sol#196)
+Low level call in ShieldedPool._payOut(uint256,address,uint256) (src/ShieldedPool.sol#363-370):
+	- (ok,None) = to.call{value: amount}() (src/ShieldedPool.sol#365)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#low-level-calls
+. analyzed (8 contracts with 101 detectors), 15 result(s) found
