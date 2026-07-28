@@ -2,7 +2,7 @@
 pragma solidity ^0.8.27;
 
 import {Script, console} from "forge-std/Script.sol";
-import {TestWETH, TestUSDG, TestSwapRouter, TestQuoterV2} from "../src/TestVenue.sol";
+import {TestWETH, TestUSDG, TestSwapRouter, TestQuoterV2} from "../test/mocks/TestVenue.sol";
 
 /// Deploys the testnet trade venue: WETH, USDG, a fixed-rate V3-shaped router,
 /// and its quoter — then seeds the router's inventory so trades clear.

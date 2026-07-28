@@ -93,6 +93,11 @@ contract CowlTradeAdapter {
     error NotMyPayout();
     error SameAsset();
     error NothingToTrade();
+    /// An ERC-20 that reports failure by return value rather than by reverting.
+    /// The pool checks every one of its own movements this way; the adapter now
+    /// matches it, so no leg of a trade can half-succeed in silence.
+    error ApprovalFailed();
+    error RefundFailed();
 
     event Traded(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
 
@@ -140,7 +145,7 @@ contract CowlTradeAdapter {
         // 2. Swap an exact output. A native input leg arrives as ether and
         // wraps; an ERC-20 leg arrived as itself.
         if (p.spend.token == 0) IWETH(weth).deposit{value: maxIn}();
-        IERC20Adapter(swapIn).approve(router, maxIn);
+        if (!IERC20Adapter(swapIn).approve(router, maxIn)) revert ApprovalFailed();
         uint256 spent = router02
             ? IV3Router02(router).exactOutputSingle(
                 IV3Router02.ExactOutputSingleParams({
@@ -165,7 +170,7 @@ contract CowlTradeAdapter {
                     sqrtPriceLimitX96: 0
                 })
             );
-        IERC20Adapter(swapIn).approve(router, 0);
+        if (!IERC20Adapter(swapIn).approve(router, 0)) revert ApprovalFailed();
 
         // 3. Shield the output straight back under the trader's commitment.
         if (p.tokenOut == 0) {
@@ -174,21 +179,24 @@ contract CowlTradeAdapter {
                 0, p.amountOut, p.shieldCommitment, p.shieldNewRoot, p.shieldCiphertext, p.shieldProof
             );
         } else {
-            IERC20Adapter(swapOut).approve(address(pool), p.amountOut);
+            if (!IERC20Adapter(swapOut).approve(address(pool), p.amountOut)) revert ApprovalFailed();
             pool.shield(
                 p.tokenOut, p.amountOut, p.shieldCommitment, p.shieldNewRoot, p.shieldCiphertext, p.shieldProof
             );
         }
 
-        // Surplus tips the submitter — never back toward the trader.
+        // Surplus tips the submitter — never back toward the trader. A tip that
+        // cannot be paid takes the trade with it rather than stranding the
+        // surplus here: this contract holds funds for one transaction and never
+        // longer, and it has no sweep, so anything left behind is left forever.
         uint256 left = maxIn - spent;
         if (left != 0) {
             if (p.spend.token == 0) {
                 IWETH(weth).withdraw(left);
                 (bool ok,) = msg.sender.call{value: left}("");
-                require(ok, "tip failed");
+                if (!ok) revert RefundFailed();
             } else {
-                IERC20Adapter(swapIn).transfer(msg.sender, left);
+                if (!IERC20Adapter(swapIn).transfer(msg.sender, left)) revert RefundFailed();
             }
         }
 

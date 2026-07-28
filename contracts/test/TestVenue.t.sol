@@ -2,7 +2,7 @@
 pragma solidity ^0.8.27;
 
 import {Test} from "forge-std/Test.sol";
-import {TestWETH, TestUSDG, TestSwapRouter, TestQuoterV2, ISwapRouter, IQuoterV2} from "../src/TestVenue.sol";
+import {TestWETH, TestUSDG, TestSwapRouter, TestQuoterV2, ISwapRouter, IQuoterV2} from "./mocks/TestVenue.sol";
 
 /// The venue the trade adapter will develop against: a fixed-rate router and
 /// quoter wearing the exact Uniswap V3 interface subset. These tests pin the

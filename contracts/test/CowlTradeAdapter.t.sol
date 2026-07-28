@@ -6,7 +6,8 @@ import {ShieldedPool} from "../src/ShieldedPool.sol";
 import {IVerifier, ShieldVerifier} from "../src/ShieldVerifier.sol";
 import {TransferVerifier} from "../src/TransferVerifier.sol";
 import {CowlTradeAdapter} from "../src/CowlTradeAdapter.sol";
-import {TestWETH, TestUSDG, TestSwapRouter, TestSwapRouter02} from "../src/TestVenue.sol";
+import {TestWETH, TestUSDG, TestSwapRouter, TestSwapRouter02} from "./mocks/TestVenue.sol";
+import {SilentFailApproveToken, SilentFailApproveWETH} from "./mocks/SilentFailToken.sol";
 
 /// The real thing, end to end: bb's own proofs drive an atomic private trade —
 /// unshield to the adapter, swap on the venue, shield the output back — against
@@ -191,5 +192,43 @@ contract CowlTradeAdapterTest is Test {
         vm.expectRevert();
         adapter.trade(p);
         assertFalse(pool.nullifierSpent(spendInputs[1]));
+    }
+
+    /// A token may report failure by returning `false` rather than reverting.
+    /// Dropping that return value would let a leg fail while the trade carried
+    /// on around it. Both approvals are checked, so it cannot.
+    ///
+    /// The venue mocks all return `true`, which is exactly why these two paths
+    /// survived 62 passing tests — see audits/static/README.md.
+    function test_a_silent_approval_failure_on_the_input_leg_unwinds_the_trade() public {
+        SilentFailApproveWETH badWeth = new SilentFailApproveWETH();
+        CowlTradeAdapter template = new CowlTradeAdapter(pool, address(router), address(badWeth), false);
+        vm.etch(address(adapter), address(template).code);
+
+        _deposit();
+        vm.expectRevert(CowlTradeAdapter.ApprovalFailed.selector);
+        adapter.trade(_params());
+
+        // The spend ran before the approval, so this proves the unwind too.
+        assertFalse(pool.nullifierSpent(spendInputs[1]));
+        assertEq(address(pool).balance, 1000);
+        assertEq(address(adapter).balance, 0);
+    }
+
+    /// The shield-leg approval is the later and nastier one: by the time it
+    /// runs, the router has already delivered the output token to the adapter.
+    /// Unchecked, a silent failure here would strand that output on a contract
+    /// with no sweep while the spend stayed nullified.
+    function test_a_silent_approval_failure_on_the_shield_leg_unwinds_the_trade() public {
+        SilentFailApproveToken badUsdg = new SilentFailApproveToken();
+        vm.etch(address(usdg), address(badUsdg).code);
+
+        _deposit();
+        vm.expectRevert(CowlTradeAdapter.ApprovalFailed.selector);
+        adapter.trade(_params());
+
+        assertFalse(pool.nullifierSpent(spendInputs[1]));
+        assertEq(pool.pooledValue(uint256(shieldInputs[0])), 0);
+        assertEq(SilentFailApproveToken(address(usdg)).balanceOf(address(adapter)), 0);
     }
 }
