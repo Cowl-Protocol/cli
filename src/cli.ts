@@ -125,6 +125,19 @@ function unwrap<T>(value: T | symbol): T {
   return value;
 }
 
+/**
+ * The last gate before value moves. `--yes` answers it for scripting — and
+ * only it: the destructive prompts (overwrite a wallet, replace a view key)
+ * never take a flag.
+ */
+async function confirmBroadcast(yes?: boolean): Promise<boolean> {
+  if (yes) {
+    row("Confirm", muted("--yes"));
+    return true;
+  }
+  return unwrap(await p.confirm({ message: "Sign and broadcast?", initialValue: false }));
+}
+
 function askPassphrase(message = "Keystore passphrase"): Promise<string> {
   // Non-interactive escape hatch for scripting/CI. Never echoed.
   const env = process.env.COWL_PASSPHRASE;
@@ -1090,7 +1103,8 @@ program
   .argument("<to>", "recipient: 0x address (public) or zcowl address (private)")
   .option("--relay <url>", "route the private send through a specific relayer instead of the network default")
   .option("--self", "submit the private send yourself, skipping the default relayer")
-  .action(async (amount: string, token: string, to: string, opts: { relay?: string; self?: boolean }) => {
+  .option("--yes", "sign and broadcast without asking — for scripts")
+  .action(async (amount: string, token: string, to: string, opts: { relay?: string; self?: boolean; yes?: boolean }) => {
     const { net } = ctx();
     if (!(Number(amount) > 0)) die("Amount must be positive.");
 
@@ -1136,6 +1150,8 @@ program
           (pool, wallet, keys) =>
             planSend(pool, wallet, keys, recipient, value, tokenField, BigInt(net.chainId), fee, relayerField),
           relayUrl,
+          undefined,
+          opts.yes,
         );
         return;
       }
@@ -1185,8 +1201,7 @@ program
     row("Amount", `${bold(amount)} ${muted(unit)}`);
     row("Network", muted(net.label));
 
-    const go = unwrap(await p.confirm({ message: "Sign and broadcast?", initialValue: false }));
-    if (!go) return;
+    if (!(await confirmBroadcast(opts.yes))) return;
 
     const pass = await askPassphrase();
     const { unlockKeystore } = await import("./keystore.js");
@@ -1217,7 +1232,8 @@ program
   .argument("[token]", "native symbol (default) or an ERC-20 address")
   .option("--exact", "move the exact amount in one deposit instead of shared denominations")
   .option("--spread <window>", "scatter the deposits across a time window (45s, 20m, 3h)")
-  .action(async (amount: string, token: string | undefined, opts: { exact?: boolean; spread?: string }) => {
+  .option("--yes", "sign and broadcast without asking — for scripts")
+  .action(async (amount: string, token: string | undefined, opts: { exact?: boolean; spread?: string; yes?: boolean }) => {
     const { net } = ctx();
     const sym = net.currency.symbol;
     if (!(Number(amount) > 0)) die("Amount must be positive.");
@@ -1238,7 +1254,7 @@ program
       return;
     }
 
-    await shieldOnChain(net, amount, tokenField, sym, Boolean(opts.exact), opts.spread);
+    await shieldOnChain(net, amount, tokenField, sym, Boolean(opts.exact), opts.spread, opts.yes);
   });
 
 /**
@@ -1428,6 +1444,7 @@ async function shieldOnChain(
   sym: string,
   exact: boolean,
   spread?: string,
+  yes?: boolean,
 ): Promise<void> {
   const spreadMs = spread ? parseSpread(spread) : null;
   requireWallet();
@@ -1467,8 +1484,7 @@ async function shieldOnChain(
   row("Pool", muted(poolAddress(net)!));
   row("Network", muted(net.label));
 
-  const go = unwrap(await p.confirm({ message: "Sign and broadcast?", initialValue: false }));
-  if (!go) return;
+  if (!(await confirmBroadcast(yes))) return;
 
   // One passphrase unlocks both halves: the account that signs the deposit and the
   // shielded keys the note is minted to.
@@ -1582,6 +1598,7 @@ async function spendOnChain(
     | ((pool: Pool, wallet: Wallet, keys: ShieldedKeys, payout: bigint) => PlannedSpend)[],
   relayUrl?: string,
   spread?: string,
+  yes?: boolean,
 ): Promise<void> {
   const spreadMs = spread ? parseSpread(spread) : null;
   requireWallet();
@@ -1598,8 +1615,7 @@ async function spendOnChain(
   showRows();
   row("Pool", muted(poolAddress(net)!));
 
-  const go = unwrap(await p.confirm({ message: "Sign and broadcast?", initialValue: false }));
-  if (!go) return;
+  if (!(await confirmBroadcast(yes))) return;
 
   // One passphrase unlocks the signer and the shielded keys the spend proves with.
   const pass = await askPassphrase();
@@ -1684,7 +1700,8 @@ program
   .option("--relay <url>", "route the spend through a specific relayer instead of the network default")
   .option("--self", "submit the withdrawal yourself, skipping the default relayer")
   .option("--spread <window>", "scatter the withdrawals across a time window (45s, 20m, 3h)")
-  .action(async (amount: string, token: string | undefined, opts: { exact?: boolean; relay?: string; self?: boolean; spread?: string }) => {
+  .option("--yes", "sign and broadcast without asking — for scripts")
+  .action(async (amount: string, token: string | undefined, opts: { exact?: boolean; relay?: string; self?: boolean; spread?: string; yes?: boolean }) => {
     const { net } = ctx();
     const sym = net.currency.symbol;
     if (!(Number(amount) > 0)) die("Amount must be positive.");
@@ -1748,6 +1765,7 @@ program
         ),
         relayUrl,
         opts.spread,
+        opts.yes,
       );
       return;
     }
@@ -1772,7 +1790,8 @@ program
   .argument("[token]", "native symbol (default) or an ERC-20 address")
   .option("--relay <url>", "route the rounds through a specific relayer instead of the network default")
   .option("--self", "submit the rounds yourself, skipping the default relayer")
-  .action(async (token: string | undefined, opts: { relay?: string; self?: boolean }) => {
+  .option("--yes", "sign and broadcast without asking — for scripts")
+  .action(async (token: string | undefined, opts: { relay?: string; self?: boolean; yes?: boolean }) => {
     const { net } = ctx();
     const sym = net.currency.symbol;
     const tokenField = tokenToField(token ?? sym, sym);
@@ -1851,6 +1870,8 @@ program
           planConsolidate(pool, w, keys, tokenField, BigInt(net.chainId), feePerRound, relayerField),
       ),
       relayUrl,
+      undefined,
+      opts.yes,
     );
   });
 
@@ -2331,7 +2352,8 @@ program
   .option("--self", "submit the trade yourself, skipping the default relayer")
   .option("--exact", "trade a precise amount instead of the shared denominations")
   .option("--max <amount>", "cap on what you will spend (defaults to the quoted price)")
-  .action(async (a: string, b: string | undefined, c: string | undefined, opts: { relay?: string; self?: boolean; exact?: boolean; max?: string }) => {
+  .option("--yes", "sign and broadcast without asking — for scripts")
+  .action(async (a: string, b: string | undefined, c: string | undefined, opts: { relay?: string; self?: boolean; exact?: boolean; max?: string; yes?: boolean }) => {
     const { net } = ctx();
     const sym = net.currency.symbol;
     const isSim = a.toLowerCase() === "buy" || a.toLowerCase() === "sell";
@@ -2396,7 +2418,7 @@ async function tradeOnChain(
   net: NetworkDef,
   amount: string,
   outSpec: string,
-  opts: { relay?: string; self?: boolean; exact?: boolean; max?: string },
+  opts: { relay?: string; self?: boolean; exact?: boolean; max?: string; yes?: boolean },
 ): Promise<void> {
   requireWallet();
   const venue = net.contracts;
@@ -2504,8 +2526,7 @@ async function tradeOnChain(
   row("Adapter", muted(adapterAddress(net)!));
   row("Pool", muted(poolAddress(net)!));
 
-  const go = unwrap(await p.confirm({ message: "Sign and broadcast?", initialValue: false }));
-  if (!go) return;
+  if (!(await confirmBroadcast(opts.yes))) return;
 
   const pass = await askPassphrase();
   const { unlockKeystore } = await import("./keystore.js");
