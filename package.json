@@ -1,7 +1,7 @@
 {
   "name": "@cowlprotocol/cli",
   "version": "0.6.11",
-  "description": "Cowl Protocol CLI — private trading on Robinhood Chain from your terminal. Shielded pool, private trades, stealth addresses, view keys, and gasless relayer.",
+  "description": "Cowl Protocol CLI \u2014 private trading on Robinhood Chain from your terminal. Shielded pool, private trades, stealth addresses, view keys, and gasless relayer.",
   "type": "module",
   "bin": {
     "cowl": "dist/cli.mjs"
@@ -20,6 +20,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node scripts/test-denominations.mjs",
     "test:relay": "node scripts/test-relaydefaults.mjs",
+    "watch": "node scripts/watch-pool.mjs",
     "prepublishOnly": "node ./build.mjs"
   },
   "keywords": [
