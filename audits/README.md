@@ -12,6 +12,7 @@ shows clean results is not evidence of anything.
 |---|---|---|---|---|---|
 | 2026-07-28 | Static analysis — slither 0.11.5 + aderyn 0.6.8, every finding triaged against source | `ShieldedPool.sol`, `CowlTradeAdapter.sol` | `1cbb48a` | No path to deposited funds. 1 Medium mitigated, 2 Low fixed in source, 3 Informational acknowledged | [static/](static/README.md) |
 | 2026-07-28 | Governance & turnstile monitoring — state watcher, recorded baseline, response playbook | Both live pools (mainnet 4663, testnet 46630) | live chain state | Turnstile exact to the wei on every token that entered through `shield()`; no pending verifier swaps; `npm run watch` | [monitoring/](monitoring/README.md) |
+| 2026-07-29 | Invariant suite — six pool properties under randomised call sequences, verifier stubbed to accept everything | `ShieldedPool.sol` | `5eb31a8` | All six held across 245,760 calls. Suite proven able to fail: 6/6 mutations caught. 2 Informational, both unreachable through a sound verifier | [invariant/](invariant/README.md) |
 
 ## Planned
 
@@ -20,7 +21,6 @@ and not before.
 
 | Work | What it can find that nothing above can |
 |---|---|
-| Foundry invariant suite | Pool accounting broken by call *ordering* — the drain class no concrete test reaches |
 | Circuit adversarial harness | Under-constrained Noir circuits — the class that can empty the pool |
 | Scanners in CI | Regressions of everything the static pass now covers |
 | npm provenance | Supply chain: proof the published package is the published source |

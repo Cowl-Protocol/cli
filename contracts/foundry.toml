@@ -5,4 +5,17 @@ libs = ["lib"]
 # The integration test feeds the real bb proof to the real verifier.
 fs_permissions = [{ access = "read", path = "../circuits/target" }]
 
+[invariant]
+runs = 256
+# Deep enough that the 32-entry root ring actually wraps. At depth 64 a sequence
+# never produced more than ~31 roots, so eviction was never reached and the
+# stale-root action returned early every time.
+depth = 160
+# The handler is meant to be told no: it replays burned nullifiers, asks the
+# turnstile for more than a token holds, and proves against evicted roots. A
+# revert is the pool working. `afterInvariant` guards the hole this opens, by
+# failing any run that never actually moved value.
+fail_on_revert = false
+shrink_run_limit = 10000
+
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

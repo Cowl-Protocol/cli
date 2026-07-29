@@ -20,6 +20,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node scripts/test-denominations.mjs",
     "test:relay": "node scripts/test-relaydefaults.mjs",
+    "test:invariant": "cd contracts && forge test --match-path \"test/ShieldedPoolInvariants.t.sol\"",
+    "test:mutants": "./audits/invariant/mutants.sh",
     "watch": "node scripts/watch-pool.mjs",
     "prepublishOnly": "node ./build.mjs"
   },
