@@ -1,7 +1,8 @@
 # Continuous integration
 
-**Date** 2026-07-29 · **Commit** `5ed1d9a` · **Scope** `Cowl-Protocol/cli`,
-`Cowl-Protocol/app`
+**Date** 2026-07-29 · **Workflows landed in** `cf9fdb6` (cli) and `b600bbc`
+(app), **extended in** `94407b4` when the circuit harness added two steps ·
+**Scope** `Cowl-Protocol/cli`, `Cowl-Protocol/app`
 
 Two workflows, both at `.github/workflows/ci.yml` in their own repository. They
 run on every push to `main` and on every pull request.
@@ -16,7 +17,7 @@ run on every push to `main` and on every pull request.
 | 🟢 | cli · typecheck, build, unit tests | lockfile, types, bundle, denominations, relay table | green |
 | 🟢 | cli · forge test | 74 contract tests from a clean clone | green |
 | 🟢 | cli · invariant suite can fail | the pool mutation harness, 6/6 | green |
-| 🟢 | cli · nargo test | 19 circuit tests, the circuit mutation harness 17/17, public inputs vs the pool | green |
+| 🟢 | cli · nargo test | 32 circuit tests, the circuit mutation harness 17/17, public inputs vs the pool | green |
 | 🟢 | app · typecheck, offline checks, build | types, four offline verify scripts, production build | green |
 | 🟢 | Supply chain | every action pinned to a full commit SHA, `contents: read`, no secrets | green |
 | 🟡 | I-01 · the app's `lint` script has never worked | eslint 9 installed, no config file of any kind | open, deliberately not a gate |
@@ -25,29 +26,32 @@ run on every push to `main` and on every pull request.
 The only 🟡 is the app's lint script: it exits 2 today and always has, and a gate
 that is red on its first run teaches everyone to ignore the red.
 
-**Both workflows are green on their first real run**, on the commits that
-introduced them.
+**Both workflows went green on their first real run**, and have stayed green
+since the circuit harness extended the `circuits` job.
 
 | Repo | Run | Head | Result |
 |---|---|---|---|
-| cli | [30436052024](https://github.com/Cowl-Protocol/cli/actions/runs/30436052024) | `cf9fdb6` | 4/4 jobs success |
-| app | [30436063309](https://github.com/Cowl-Protocol/app/actions/runs/30436063309) | `b600bbc` | success |
+| cli | [30436052024](https://github.com/Cowl-Protocol/cli/actions/runs/30436052024) | `cf9fdb6` | 4/4 jobs success — first run |
+| app | [30436063309](https://github.com/Cowl-Protocol/app/actions/runs/30436063309) | `b600bbc` | success — first run |
+| cli | [30437860292](https://github.com/Cowl-Protocol/cli/actions/runs/30437860292) | `94407b4` | 4/4 jobs success — with the circuit harness |
 
-| Job | Duration |
-|---|---|
-| cli · typecheck, build, unit tests | 22s |
-| cli · forge test | 66s |
-| cli · invariant suite can fail | 28s |
-| cli · nargo test | 8s |
-| app · typecheck, offline checks, build | 90s (npm ci 48s, typecheck 9s, offline checks 2s, build 24s) |
+Durations from the `94407b4` run, which is the current shape of the pipeline:
 
-**On the 8-second circuits job.** That is fast enough to be worth doubting: a
-job that installs a toolchain and runs 19 tests in 8 seconds could just as easily
-be a job that ran nothing and exited green. The loop was checked directly for
-that, outside CI, by giving it a failing package under `bash -e`, which is the
-shell GitHub uses. It aborts on the failure with a non-zero status and never
+| Job | Duration | Steps |
+|---|---|---|
+| cli · typecheck, build, unit tests | 19s | |
+| cli · forge test | 64s | |
+| cli · invariant suite can fail | 82s | |
+| cli · nargo test | 37s | `nargo test` 6s, `mutants.mjs` 22s, public inputs 1s |
+| app · typecheck, offline checks, build | 90s | npm ci 48s, typecheck 9s, offline checks 2s, build 24s |
+
+**On the 6-second `nargo test` step.** That is fast enough to be worth doubting:
+a step that runs 32 tests across three packages in six seconds could just as
+easily be a step that ran nothing and exited green. The loop was checked directly
+for that, outside CI, by giving it a failing package under `bash -e`, which is
+the shell GitHub uses. It aborts on the failure with a non-zero status and never
 reaches the third package, so a missing `nargo` (exit 127) or a single failing
-circuit test turns the job red. The job being green therefore means all three
+circuit test turns the job red. The step being green therefore means all three
 packages ran and passed. The speed is a prebuilt binary on a fast runner.
 
 **How this was written, and what that cost.** `act`, `gh` and `actionlint` are
@@ -79,16 +83,22 @@ are listed in [`../README.md`](../README.md).
 | `node` | `npm ci`, `typecheck`, `build`, `npm test`, `test:relay -- --static` | lockfile in sync via `npm ci --dry-run`; typecheck clean; `built dist/cli.mjs`; denominations all green; relay static half all green |
 | `contracts` | `forge test` | 74 passed, 0 failed |
 | `mutants` | `audits/invariant/mutants.sh` | 6/6 mutants caught, source restored |
-| `circuits` | `nargo test` in `notes`, `shield`, `transfer` | 3 + 4 + 12 = 19 tests passed |
+| `circuits` | `nargo test` in `notes`, `shield`, `transfer`; then `audits/circuits/mutants.mjs`; then `nargo compile` and `audits/circuits/publicinputs.mjs` | 3 + 6 + 23 = 32 tests passed; 17/17 circuit mutants caught; 14 and 6 public inputs matched |
 
 `forge test` runs from a clean clone with no `forge install` and no circuit
 build, because forge-std is vendored and the proof fixtures are committed on
 purpose (the reasoning is written into `.gitignore`). The `bench-*` circuit
 packages are measurements rather than checks and are not run.
 
-The `mutants` job is the one that would be easy to leave out and should not be.
-Without it an invariant can be quietly weakened into one that constrains nothing
-and the suite stays green. It costs 13 seconds warm.
+**Both mutation harnesses run on every push**, and they are the pair that would
+be easiest to leave out and hardest to notice missing. Without them an invariant
+or a circuit test can be quietly weakened into one that constrains nothing, and
+the suite stays green while covering less every month. Together they cost about
+40 seconds.
+
+The `circuits` job also compiles `transfer` and `shield` before checking their
+public inputs against the pool, because the compiled artifacts are gitignored and
+so are not there from a clean clone.
 
 ## app — one job
 
