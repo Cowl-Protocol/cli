@@ -60,7 +60,15 @@ for (const net of Object.values(NETWORKS)) {
 // Live half. The relayer named in the table has to be the one actually serving
 // that chain's pool: a testnet URL left on a mainnet entry would pass every
 // static check above and then quote against the wrong chain entirely.
-for (const net of withPool) {
+//
+// `--static` skips it, which is how CI runs this file. The static half is a
+// property of the source and belongs on every push; the live half depends on two
+// daemons being reachable, and a gate that goes red because a VPS blinked is a
+// gate everyone learns to ignore. The live half still runs by hand, and by
+// itself it is the only thing that catches a daemon left on an older build.
+const STATIC_ONLY = process.argv.includes("--static");
+if (STATIC_ONLY) console.log("\n  ·   live relayer checks skipped (--static)");
+for (const net of STATIC_ONLY ? [] : withPool) {
   const url = `${net.defaultRelay.replace(/\/$/, "")}/quote`;
   let spend, trade;
   try {

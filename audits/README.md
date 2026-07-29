@@ -21,7 +21,7 @@ to the scanners.
 
 | | Step | Artifact |
 |---|---|---|
-| ☐ | GitHub Actions workflow (cli, app) | — |
+| ☑ | GitHub Actions workflow (cli, app) | [ci/](ci/README.md) |
 | ☐ | Circuit adversarial harness | — |
 | ☑ | Foundry invariant suite | [invariant/](invariant/README.md) |
 
@@ -33,8 +33,9 @@ empties a pool is the opposite one, a circuit that accepts a witness it should
 reject, and reaching it needs adversarial witness generators, `should_fail`
 tests, and wider differential coverage in `crosscheck.mts`.
 
-`gh` is not installed on the build machine, so workflows are written locally and
-pushed by hand.
+`gh`, `act` and `actionlint` are all absent from the build machine, so workflows
+are written locally, every command in them is proven locally, and the workflows
+themselves are first exercised by the push that lands them.
 
 ### Phase 1 — free tooling
 
@@ -49,9 +50,9 @@ pushed by hand.
 | ☐ | Scanners wired into CI, build fails on high severity | — |
 
 Both scanners run today from [`static/scan.sh`](static/scan.sh) and their output
-is triaged by hand. Running them on every push waits on Phase 0's first step.
-The plan's own standard applies until then: a scanner nobody is forced to read
-is not a control.
+is triaged by hand. Wiring them into every push is now unblocked, since
+[ci/](ci/README.md) landed. The plan's own standard applies until then: a
+scanner nobody is forced to read is not a control.
 
 ### Phase 2 — proof that the published package is the published source
 
@@ -116,6 +117,7 @@ pool defence, each caught by the invariant that names it.
 | 2026-07-28 | Static analysis — slither 0.11.5 + aderyn 0.6.8, every finding triaged against source | `ShieldedPool.sol`, `CowlTradeAdapter.sol` | `1cbb48a` | No path to deposited funds. 1 Medium mitigated, 2 Low fixed in source, 3 Informational acknowledged | [static/](static/README.md) |
 | 2026-07-28 | Governance & turnstile monitoring — state watcher, recorded baseline, response playbook | Both live pools (mainnet 4663, testnet 46630) | live chain state | Turnstile exact to the wei on every token that entered through `shield()`; no pending verifier swaps; `npm run watch` | [monitoring/](monitoring/README.md) |
 | 2026-07-29 | Invariant suite — six pool properties under randomised call sequences, verifier stubbed to accept everything | `ShieldedPool.sol` | `5eb31a8` | All six held across 245,760 calls. Suite proven able to fail: 6/6 mutations caught. 2 Informational, both unreachable through a sound verifier | [invariant/](invariant/README.md) |
+| 2026-07-29 | Continuous integration — build, typecheck, contracts, circuits and the mutation harness on every push, both repos | `Cowl-Protocol/cli`, `Cowl-Protocol/app` | `5ed1d9a` | 5 jobs, every command proven locally, every action SHA-pinned, no gate touching live infrastructure. 1 Informational (the app's lint script has never worked) | [ci/](ci/README.md) |
 
 ## Conventions
 
@@ -155,8 +157,16 @@ each finding, so a reader can trace finding to fix without trusting the summary.
 ```
 npm run test:invariant                 # the six pool invariants
 npm run test:mutants                   # proves the invariant suite can fail
-npm run watch                          # governance + turnstile vs baseline
+npm run test:relay -- --static         # the half of the relay check CI runs
 ./audits/static/scan.sh                # regenerates both scanner reports
 cd contracts && forge test             # the whole contract suite
 cd circuits/transfer && nargo test     # the transfer circuit
+```
+
+Two of these read live infrastructure and are deliberately kept out of CI, so
+they only ever run when someone runs them:
+
+```
+npm run watch                          # governance + turnstile vs baseline
+npm run test:relay                     # adds the live half: are the daemons current
 ```

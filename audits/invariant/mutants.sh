@@ -19,7 +19,10 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONTRACTS="$(cd "$HERE/../../contracts" && pwd)"
 POOL="$CONTRACTS/src/ShieldedPool.sol"
-BACKUP="$(mktemp -t ShieldedPool.sol.orig.XXXXXX)"
+# Spelled with an explicit directory rather than `mktemp -t`, which means
+# different things to BSD and GNU mktemp and so behaves differently on a laptop
+# and on a CI runner.
+BACKUP="$(mktemp "${TMPDIR:-/tmp}/ShieldedPool.sol.orig.XXXXXX")"
 
 cp "$POOL" "$BACKUP"
 restore() { cp "$BACKUP" "$POOL"; rm -f "$BACKUP"; }

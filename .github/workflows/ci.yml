@@ -1,0 +1,95 @@
+name: CI
+
+# Every gate here is a command that already passes on a clean checkout. Nothing
+# in this file reaches the network for a verdict: no live relayer, no RPC, no
+# deployed pool. A gate that goes red because a VPS blinked is a gate everyone
+# learns to route around, and then it is not a control at all.
+#
+# The live checks that were deliberately left out still matter and still run by
+# hand: `npm run test:relay` (without --static) is the only thing that catches a
+# relayer daemon left on an older build, and `npm run watch` is the only thing
+# that reads the money. See audits/ for where those sit.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Read-only. Nothing here publishes, deploys, or writes back to the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    name: typecheck, build, unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+      # Static half only. The live half asks two daemons for a quote, which is a
+      # property of the infrastructure rather than of this commit.
+      - run: npm run test:relay -- --static
+
+  contracts:
+    name: forge test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1
+      # forge-std is vendored and the proof fixtures are committed (see
+      # .gitignore), so this runs from a clean clone with no forge install and no
+      # circuit build. That is deliberate: the integration test is the only place
+      # note math, circuit, proof, verifier and pool are checked end to end.
+      - run: forge test
+        working-directory: contracts
+
+  mutants:
+    name: invariant suite can fail
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1
+      # Breaks one pool defence at a time and requires the paired invariant to
+      # catch it. Without this, an invariant could be quietly weakened into one
+      # that no longer constrains anything and the suite would stay green.
+      - run: ./audits/invariant/mutants.sh
+
+  circuits:
+    name: nargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: noir-lang/noirup@7dbe69ccc78877f0200ffa5a40836c953d2cfd8f # v0.1.4
+        with:
+          # Pinned to the toolchain the circuits are verified against locally.
+          # noirup prepends the "v" itself for a numeric version.
+          toolchain: 1.0.0-beta.22
+      # The three packages that carry tests. The bench-* workspace members are
+      # measurements, not checks, and are not run here.
+      - name: nargo test
+        working-directory: circuits
+        run: |
+          for pkg in notes shield transfer; do
+            echo "::group::nargo test $pkg"
+            (cd "$pkg" && nargo test)
+            echo "::endgroup::"
+          done
