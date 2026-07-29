@@ -13,6 +13,31 @@ Noir test can reach is covered by a separate cross-check against the pool.
 
 Tests: transfer 12 → **23**, shield 4 → **6**, notes 3.
 
+## Status
+
+🟢 clean · 🟡 watch, residual named · 🔴 act. Scale defined in
+[`../README.md`](../README.md).
+
+| | Check | Result |
+|---|---|---|
+| 🟢 | Value conservation, in the field and at its edges | held; wraps blocked by the range checks on every leg |
+| 🟢 | Input membership under a remembered root | held |
+| 🟢 | Leaf index tied to the position the path proves | held — the double-spend this would otherwise open |
+| 🟢 | Nullifier derived from the spending key and that leaf | held |
+| 🟢 | Output leaf bound to the note it claims to be | held — the mint this would otherwise open |
+| 🟢 | Outputs append in order, to the tree the chain has | held |
+| 🟢 | `new_root` is what the insertions produce | held |
+| 🟢 | What leaves matches the asset the notes hold | held |
+| 🟢 | Chain id, recipient and relayer survive compilation | held; 14 of `spend` and 6 of `shield` match the pool position for position |
+| 🟢 | The tests can fail | 17 constraints deleted one at a time, 17 caught |
+| 🟡 | I-01 · two input slots need not be different notes | acknowledged, the pool's `RepeatedNullifier` holds it |
+| 🟡 | I-02 · `shield` does not range-check `value` | acknowledged, needs a token with 3.4e38 supply; stuck, not stealable |
+
+**No missing constraint was found, and the circuits were not changed.** Nine
+constraints had no test that isolated them before this phase; all nine turned out
+to be enforced correctly. Both 🟡 items would cost a 7-day timelocked verifier
+swap on an immutable pool to close.
+
 ```
 npm run test:circuits          # all three packages
 npm run test:circuit-mutants   # proves the tests can fail

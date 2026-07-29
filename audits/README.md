@@ -6,6 +6,33 @@ behind it does not ship — not on the website, not in a tweet. Reports are
 published whether or not the findings are flattering; an audit page that only
 shows clean results is not evidence of anything.
 
+## Status at a glance
+
+| | Area | Where it stands | Report |
+|---|---|---|---|
+| 🟢 | Pool accounting | Six invariants held across 245,760 randomised calls. Turnstile exact to the wei on every token that ever entered, on both live pools | [invariant/](invariant/README.md) · [monitoring/](monitoring/README.md) |
+| 🟢 | Circuit constraints | Every constraint proven load-bearing: 17 deleted one at a time, 17 caught. Public inputs match the pool on all 14 of `spend` and 6 of `shield` | [circuits/](circuits/README.md) |
+| 🟢 | Contracts, static | Neither scanner found a path to deposited funds. Every finding triaged against source | [static/](static/README.md) |
+| 🟢 | Test integrity | Both suites carry a mutation harness, so a test that stopped constraining anything would show up rather than stay green | [invariant/](invariant/README.md) · [circuits/](circuits/README.md) |
+| 🟢 | Continuous integration | 5 jobs across both repos, green since the first run, every action SHA-pinned | [ci/](ci/README.md) |
+| 🟡 | Governance | Pool is not a proxy and cannot be edited. The one lever is a 7-day timelocked verifier swap, held by a single deployer EOA. Watched, not yet scheduled, not yet a multisig | [static/](static/README.md) · [monitoring/](monitoring/README.md) |
+| 🟡 | Trade adapter | L-01 and L-02 are fixed in source; the deployed adapter predates the fixes because a redeploy was deliberately deferred | [static/](static/README.md) |
+| 🟡 | Circuit residuals | Two properties the circuits do not carry alone. Both are held by the pool or need a token that does not exist. Closing either costs a timelocked verifier swap | [circuits/](circuits/README.md) |
+
+**No 🔴 anywhere today.**
+
+### What the colours mean
+
+| | Meaning |
+|---|---|
+| 🟢 | **Clean.** Checked, holds, nothing outstanding |
+| 🟡 | **Watch.** Understood and deliberately not closed, or closed in source but not yet on chain. The reason and the residual are both written down |
+| 🔴 | **Act.** Reaches deposited funds, or is unresolved above Informational and nobody has decided what to do |
+
+The scale is about what is left standing, not about how a finding was scored.
+A Medium that was fully closed is 🟢; an Informational deliberately left open is
+🟡. Severity is the Impact × Likelihood matrix further down and stays separate.
+
 ## Progress
 
 Phases and steps follow the audit plan this work is run from. A step is checked
@@ -116,13 +143,13 @@ pool defence, each caught by the invariant that names it.
 
 ## Reports
 
-| Date | Work | Scope | Audited commit | Outcome | Report |
-|---|---|---|---|---|---|
-| 2026-07-28 | Static analysis — slither 0.11.5 + aderyn 0.6.8, every finding triaged against source | `ShieldedPool.sol`, `CowlTradeAdapter.sol` | `1cbb48a` | No path to deposited funds. 1 Medium mitigated, 2 Low fixed in source, 3 Informational acknowledged | [static/](static/README.md) |
-| 2026-07-28 | Governance & turnstile monitoring — state watcher, recorded baseline, response playbook | Both live pools (mainnet 4663, testnet 46630) | live chain state | Turnstile exact to the wei on every token that entered through `shield()`; no pending verifier swaps; `npm run watch` | [monitoring/](monitoring/README.md) |
-| 2026-07-29 | Invariant suite — six pool properties under randomised call sequences, verifier stubbed to accept everything | `ShieldedPool.sol` | `5eb31a8` | All six held across 245,760 calls. Suite proven able to fail: 6/6 mutations caught. 2 Informational, both unreachable through a sound verifier | [invariant/](invariant/README.md) |
-| 2026-07-29 | Continuous integration — build, typecheck, contracts, circuits and the mutation harness on every push, both repos | `Cowl-Protocol/cli`, `Cowl-Protocol/app` | `cf9fdb6`, `b600bbc` | 5 jobs, all green on the first real run. Every action SHA-pinned, no gate touching live infrastructure. 1 Informational (the app's lint script has never worked) | [ci/](ci/README.md) |
-| 2026-07-29 | Circuit adversarial harness — witnesses valid in every respect but one, aimed at each constraint in turn, plus the public-input binding against the pool | `transfer`, `shield`, `notes` | `26511b2` | Every constraint proven load-bearing: 17 deleted one at a time, 17 caught. No missing constraint found; circuits unchanged. 2 Informational | [circuits/](circuits/README.md) |
+| | Date | Work | Scope | Audited commit | Outcome | Report |
+|---|---|---|---|---|---|---|
+| 🟡 | 2026-07-28 | Static analysis — slither 0.11.5 + aderyn 0.6.8, every finding triaged against source | `ShieldedPool.sol`, `CowlTradeAdapter.sol` | `1cbb48a` | No path to deposited funds. 1 Medium mitigated, 2 Low fixed in source, 3 Informational acknowledged | [static/](static/README.md) |
+| 🟡 | 2026-07-28 | Governance & turnstile monitoring — state watcher, recorded baseline, response playbook | Both live pools (mainnet 4663, testnet 46630) | live chain state | Turnstile exact to the wei on every token that entered through `shield()`; no pending verifier swaps; `npm run watch` | [monitoring/](monitoring/README.md) |
+| 🟢 | 2026-07-29 | Invariant suite — six pool properties under randomised call sequences, verifier stubbed to accept everything | `ShieldedPool.sol` | `5eb31a8` | All six held across 245,760 calls. Suite proven able to fail: 6/6 mutations caught. 2 Informational, both unreachable through a sound verifier | [invariant/](invariant/README.md) |
+| 🟢 | 2026-07-29 | Continuous integration — build, typecheck, contracts, circuits and the mutation harness on every push, both repos | `Cowl-Protocol/cli`, `Cowl-Protocol/app` | `cf9fdb6`, `b600bbc` | 5 jobs, all green on the first real run. Every action SHA-pinned, no gate touching live infrastructure. 1 Informational (the app's lint script has never worked) | [ci/](ci/README.md) |
+| 🟢 | 2026-07-29 | Circuit adversarial harness — witnesses valid in every respect but one, aimed at each constraint in turn, plus the public-input binding against the pool | `transfer`, `shield`, `notes` | `26511b2` | Every constraint proven load-bearing: 17 deleted one at a time, 17 caught. No missing constraint found; circuits unchanged. 2 Informational | [circuits/](circuits/README.md) |
 
 ## Conventions
 

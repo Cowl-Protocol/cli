@@ -11,6 +11,29 @@ that names that defence. Two assumptions the pool inherits from the circuits
 rather than re-deriving are recorded below as informational; neither is
 reachable through a sound verifier.
 
+## Status
+
+🟢 clean · 🟡 watch, residual named · 🔴 act. Scale defined in
+[`../README.md`](../README.md).
+
+| | Check | Result |
+|---|---|---|
+| 🟢 | 1 · `pooledValue` never exceeds the balance behind it | held, 40,960 calls |
+| 🟢 | 2 · a nullifier is never accepted twice | held, 40,960 calls |
+| 🟢 | 3 · a commitment is never inserted twice | held, 40,960 calls |
+| 🟢 | 4 · outflow never exceeds inflow, per token | held, 40,960 calls |
+| 🟢 | 5 · leaf index accounts for every inserted leaf | held, 40,960 calls |
+| 🟢 | 6 · every retained root stays retrievable | held, 40,960 calls |
+| 🟢 | The suite can fail | 6 pool defences deleted one at a time, 6 caught |
+| 🟢 | The handler actually reaches the pool | pinned by a fixed sequence, not by `afterInvariant` |
+| 🟡 | I-01 · the root ring assumes distinct roots | acknowledged, unreachable through a sound verifier |
+| 🟡 | I-02 · a root of zero is never evicted | acknowledged, same |
+
+**Nothing here reaches deposited funds.** Both 🟡 items are properties the pool
+inherits from the circuits without restating them, which is only visible because
+this suite removes the circuits. Closing either costs a storage slot on every
+insertion, forever, on an immutable pool.
+
 Reproduce:
 
 ```

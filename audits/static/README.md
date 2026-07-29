@@ -20,6 +20,26 @@ source is a separate job and has not been done.
 Test baseline at the same commit, both green before and after this scan:
 62 Foundry tests, 12 Noir tests in `circuits/transfer`.
 
+## Status
+
+🟢 clean · 🟡 watch, residual named · 🔴 act. Scale defined in
+[`../README.md`](../README.md).
+
+| | Finding | Severity | Where it stands |
+|---|---|---|---|
+| 🟢 | Path to deposited funds | — | **Neither tool found one.** Every finding read against source |
+| 🟡 | M-01 · verifier-swap escape hatch, owner is a single EOA | Medium | Mitigated — watched by [`../monitoring/`](../monitoring/README.md); scheduling and a multisig still open |
+| 🟡 | L-01 · adapter refund `transfer` return unchecked | Low | Fixed in `8b1c58f`, **not deployed** — redeploy deferred, and the branch still has no unit test |
+| 🟡 | L-02 · adapter `approve` returns unchecked, 3 sites | Low | Fixed in `8b1c58f`, **not deployed** — fails closed either way, pinned by failing-first tests |
+| 🟡 | I-01 · adapter is a one-way sink | Informational | Acknowledged — holds funds for one transaction by design |
+| 🟡 | I-02 · fee-on-transfer tokens desync their own `pooledValue` | Informational | Acknowledged — bounded per token by the turnstile |
+| 🟡 | I-03 · USDT-shaped tokens cannot shield | Informational | Acknowledged — fails closed |
+
+**Why L-01 and L-02 are 🟡 and not 🟢.** They are fixed in this repository and the
+deployed adapter predates the fixes, deliberately. Nothing on chain carries them
+yet, so the source and the running contract differ, and this table says so rather
+than letting a green tick imply otherwise. They ride the next adapter redeploy.
+
 ### Before and after
 
 The scan ran, three things were fixed, and it ran again. Both columns come from

@@ -3,6 +3,29 @@
 Audit plan Step 3, brought forward. Every other phase protects code that has not
 run yet; this one watches the balance sitting in the pool right now.
 
+## Status
+
+🟢 clean · 🟡 watch, residual named · 🔴 act. Scale defined in
+[`../README.md`](../README.md).
+
+| | Check | Last read |
+|---|---|---|
+| 🟢 | Turnstile exact, every token that entered through `shield()` | exact to the wei, both pools |
+| 🟢 | Pool owner unchanged | matches the recorded baseline |
+| 🟢 | Both verifier addresses unchanged | match the recorded baseline |
+| 🟢 | No verifier swap pending, either kind | none |
+| 🟢 | The alarm actually fires | proven against simulated drift |
+| 🟡 | Nothing schedules the watcher | run by hand; a VPS timer needs a deploy |
+| 🟡 | The relayer float is not watched | daemons already report `floatWei` and `spendsLeft` in every quote, so the check is one HTTP GET |
+| 🟡 | No notification channel | an alarm nobody is told about is a log entry |
+
+**The pool has no pause.** If this alarms, the levers are: stop the relayers,
+banner the app, tell people to withdraw self-paid. That is the whole playbook and
+it is written out below.
+
+The three 🟡 rows are the same gap seen from three sides — the watcher is built
+and proven, and nothing runs it on a clock or tells anyone when it speaks.
+
 ```
 npm run watch                                  # every network with a pool
 npm run watch -- --network robinhood-mainnet

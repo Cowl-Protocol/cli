@@ -6,6 +6,25 @@
 Two workflows, both at `.github/workflows/ci.yml` in their own repository. They
 run on every push to `main` and on every pull request.
 
+## Status
+
+🟢 clean · 🟡 watch, residual named · 🔴 act. Scale defined in
+[`../README.md`](../README.md).
+
+| | Job | Covers | Result |
+|---|---|---|---|
+| 🟢 | cli · typecheck, build, unit tests | lockfile, types, bundle, denominations, relay table | green |
+| 🟢 | cli · forge test | 74 contract tests from a clean clone | green |
+| 🟢 | cli · invariant suite can fail | the pool mutation harness, 6/6 | green |
+| 🟢 | cli · nargo test | 19 circuit tests, the circuit mutation harness 17/17, public inputs vs the pool | green |
+| 🟢 | app · typecheck, offline checks, build | types, four offline verify scripts, production build | green |
+| 🟢 | Supply chain | every action pinned to a full commit SHA, `contents: read`, no secrets | green |
+| 🟡 | I-01 · the app's `lint` script has never worked | eslint 9 installed, no config file of any kind | open, deliberately not a gate |
+
+**No gate reaches the network for a verdict**, which is the design rule below.
+The only 🟡 is the app's lint script: it exits 2 today and always has, and a gate
+that is red on its first run teaches everyone to ignore the red.
+
 **Both workflows are green on their first real run**, on the commits that
 introduced them.
 
