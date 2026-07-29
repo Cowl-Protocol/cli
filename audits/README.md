@@ -15,6 +15,7 @@ shows clean results is not evidence of anything.
 | 🟢 | Contracts, static | Neither scanner found a path to deposited funds. Every finding triaged against source, and a gate on every push now fails on anything untriaged | [static/](static/README.md) |
 | 🟢 | Test integrity | Both suites carry a mutation harness, so a test that stopped constraining anything would show up rather than stay green | [invariant/](invariant/README.md) · [circuits/](circuits/README.md) |
 | 🟢 | Continuous integration | 5 jobs across both repos, green since the first run, every action SHA-pinned | [ci/](ci/README.md) |
+| 🟡 | App and CLI code | CodeQL runs on every push and weekly in both repositories, on the wider `security-extended` suite. It reports rather than gates, and nothing has been triaged yet | [ci/](ci/README.md) |
 | 🟡 | Governance | Pool is not a proxy and cannot be edited. The one lever is a 7-day timelocked verifier swap, held by a single deployer EOA. Watched, not yet scheduled, not yet a multisig | [static/](static/README.md) · [monitoring/](monitoring/README.md) |
 | 🟡 | Trade adapter | L-01 and L-02 are fixed in source; the deployed adapter predates the fixes because a redeploy was deliberately deferred | [static/](static/README.md) |
 | 🟡 | Circuit residuals | Two properties the circuits do not carry alone. Both are held by the pool or need a token that does not exist. Closing either costs a timelocked verifier swap | [circuits/](circuits/README.md) |
@@ -74,11 +75,21 @@ that first run.
 |---|---|---|
 | ☑ | Slither, every finding triaged against source | [static/](static/README.md) |
 | ☑ | Aderyn, same | [static/](static/README.md) |
-| ☐ | CodeQL (app, cli) | — |
+| ☐ | CodeQL (app, cli) | workflow in place, triage pending |
 | ☐ | OpenSSF Scorecard | — |
 | ☐ | Dependabot | — |
 | ☐ | Socket | — |
 | ☑ | Scanners wired into CI, build fails on anything untriaged | [static/](static/README.md) |
+
+**CodeQL stays unticked on purpose.** Both repositories have
+`.github/workflows/codeql.yml` as of 2026-07-29, pinned, scoped to
+`security-events: write` in its own file so `ci.yml` stays read-only, running on
+every push and weekly so new queries reach unchanged code. But it **reports, it
+does not gate** — the CodeQL action has no fail-on-finding switch, and there is no
+baseline behind it the way there is for slither and aderyn, because writing one
+before ever seeing the output would be guessing. The rule at the top of this
+section applies: a step is ticked when its artifact is here. What completes it is
+reading the first run and writing the verdicts down.
 
 **The gate is stricter than the plan asked for.** The plan says the build should
 fail on any high-severity finding. That would be the wrong line here: tool

@@ -4,8 +4,24 @@
 (app), **extended in** `94407b4` when the circuit harness added two steps ·
 **Scope** `Cowl-Protocol/cli`, `Cowl-Protocol/app`
 
-Two workflows, both at `.github/workflows/ci.yml` in their own repository. They
-run on every push to `main` and on every pull request.
+Two workflows at `.github/workflows/ci.yml`, one per repository, running on every
+push to `main` and every pull request. Since 2026-07-29 each repository also
+carries `.github/workflows/codeql.yml`.
+
+**Why CodeQL is a second file rather than another job.** `ci.yml` declares
+`permissions: contents: read` and nothing in it publishes, deploys or writes back
+to a repository. CodeQL needs `security-events: write` to file alerts. Keeping it
+separate keeps that property true for `ci.yml` instead of widening it to
+accommodate one tool — the same reasoning that will apply when npm provenance
+needs a publish workflow.
+
+**CodeQL reports, it does not gate.** There is no fail-on-finding switch in the
+action, and unlike the slither and aderyn gate below there is no baseline behind
+it yet. Findings arrive as code-scanning alerts. Turning them into a triaged
+report with verdicts is what completes that step, and it needs the first run to
+exist first. It is scheduled weekly as well as on push, because CodeQL ships new
+queries regularly and a push-only trigger never runs them against code that has
+not changed.
 
 ## Status
 

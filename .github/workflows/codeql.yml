@@ -1,0 +1,52 @@
+name: CodeQL
+
+# Its own file, not a job inside ci.yml, because of one line: CodeQL needs
+# `security-events: write` to publish alerts. ci.yml is `contents: read` and
+# nothing in it publishes anything, which is a property worth keeping rather
+# than widening to accommodate a second tool.
+#
+# **This reports, it does not gate.** There is no "fail the build on a finding"
+# switch in the CodeQL action, and unlike the slither and aderyn gate in ci.yml
+# there is no baseline behind it yet — writing one before ever seeing the output
+# would be guessing. Findings land as code-scanning alerts, and turning them into
+# a triaged report with verdicts, the way audits/static/README.md does, is the
+# half of this step that needs the first run to exist.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, off the hour so it does not land in GitHub's on-the-hour crush.
+    # The schedule is the point rather than an extra: CodeQL ships new queries
+    # regularly, and this is what runs them against code that has not changed.
+    - cron: "27 5 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze javascript-typescript
+    runs-on: ubuntu-latest
+    permissions:
+      # The three the action asks for, and nothing else. `security-events` to
+      # publish alerts, `actions` to read workflow metadata, `contents` to check
+      # the code out.
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@4187e74d05793876e9989daffde9c3e66b4acd07 # v3
+        with:
+          languages: javascript-typescript
+          # The wider suite on purpose. This repository holds the keystore paths
+          # and the proving code, so the lower-precision queries are worth the
+          # triage they cost. If the first run buries the signal, that is a
+          # decision to make with output in hand rather than a guess now.
+          queries: security-extended
+      # No build step. JavaScript and TypeScript are analysed from source.
+      - uses: github/codeql-action/analyze@4187e74d05793876e9989daffde9c3e66b4acd07 # v3
