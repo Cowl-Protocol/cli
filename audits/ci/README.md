@@ -6,13 +6,38 @@
 Two workflows, both at `.github/workflows/ci.yml` in their own repository. They
 run on every push to `main` and on every pull request.
 
-**What is verified, and what is not.** Every command in both workflows was run
-locally against a clean tree and passes, and both files parse as YAML with every
-action pinned to a full commit SHA. **The workflows themselves have not
-executed**: `act`, `gh` and `actionlint` are all absent from the build machine,
-so nothing here can run a GitHub Actions job locally. The first real run happens
-on the first push, and that is the point at which this phase is proven rather
-than argued.
+**Both workflows are green on their first real run**, on the commits that
+introduced them.
+
+| Repo | Run | Head | Result |
+|---|---|---|---|
+| cli | [30436052024](https://github.com/Cowl-Protocol/cli/actions/runs/30436052024) | `cf9fdb6` | 4/4 jobs success |
+| app | [30436063309](https://github.com/Cowl-Protocol/app/actions/runs/30436063309) | `b600bbc` | success |
+
+| Job | Duration |
+|---|---|
+| cli · typecheck, build, unit tests | 22s |
+| cli · forge test | 66s |
+| cli · invariant suite can fail | 28s |
+| cli · nargo test | 8s |
+| app · typecheck, offline checks, build | 90s (npm ci 48s, typecheck 9s, offline checks 2s, build 24s) |
+
+**On the 8-second circuits job.** That is fast enough to be worth doubting: a
+job that installs a toolchain and runs 19 tests in 8 seconds could just as easily
+be a job that ran nothing and exited green. The loop was checked directly for
+that, outside CI, by giving it a failing package under `bash -e`, which is the
+shell GitHub uses. It aborts on the failure with a non-zero status and never
+reaches the third package, so a missing `nargo` (exit 127) or a single failing
+circuit test turns the job red. The job being green therefore means all three
+packages ran and passed. The speed is a prebuilt binary on a fast runner.
+
+**How this was written, and what that cost.** `act`, `gh` and `actionlint` are
+all absent from the build machine, so no GitHub Actions job could be run locally
+before pushing. What was done instead: every command in both workflows was run
+locally against a clean tree, both files were parsed as YAML, and every action
+pin was checked to be a full 40-character SHA. That made the first push the first
+real execution — which passed, but the sequence is worth naming, because it is
+the one part of this phase that was argued before it was proven.
 
 ## The rule these workflows follow
 
