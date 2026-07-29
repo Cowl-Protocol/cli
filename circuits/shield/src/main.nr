@@ -82,3 +82,46 @@ fn cannot_claim_an_unrelated_new_root() {
     let (before, _, _) = insert(c, path, right);
     main(1, 4, path, right, 2, 3, c, before, 0xbeef, 0);
 }
+
+/// The leaf index the contract records has to be the one the path spells out.
+///
+/// The contract takes `leaf_index` as a public input and uses its own
+/// `nextLeafIndex` for it, so if the circuit did not hold the prover to the
+/// path, the position the pool records and the position the note actually
+/// occupies would drift apart. Every later membership proof would then be
+/// against a tree nobody can rebuild.
+///
+/// Valid in every other respect: the commitment is well-formed, the before-root
+/// is the chain's, and the after-root is the one the insertion produces. Only
+/// the claimed index is wrong.
+#[test(should_fail_with = "leaf index contradicts the insertion path")]
+fn cannot_claim_a_leaf_index_the_path_does_not_reach() {
+    let path = notes::zeros_path();
+    let right = [false; TREE_DEPTH];
+    let c = commit(1, 2, 3, 4);
+    let (before, after, index) = insert(c, path, right);
+    assert_eq(index, 0); // the path really does reach leaf 0
+    main(1, 4, path, right, 2, 3, c, before, after, 7);
+}
+
+/// `value` is not range-checked here, and in `transfer` every input value is.
+///
+/// The asymmetry is recorded rather than fixed: a deposit above 2^128 would mint
+/// a note that no spend could ever consume, because the spend circuit's range
+/// check would reject it as an input. The funds would be stuck rather than
+/// stealable. Reaching it needs a token whose supply exceeds 2^128 base units,
+/// which is 3.4e38 — far above any asset the pool holds.
+///
+/// This test asserts the current behaviour so the day someone adds the range
+/// check, this is what tells them a decision was made rather than a line lost.
+#[test]
+fn a_deposit_larger_than_the_spend_range_check_is_accepted_here() {
+    // 2^130, written as a Field literal because `1 << 130` infers u32 and
+    // overflows before it ever reaches the circuit.
+    let huge: Field = 0x400000000000000000000000000000000;
+    let path = notes::zeros_path();
+    let right = [false; TREE_DEPTH];
+    let c = commit(1, 2, huge, 4);
+    let (before, after, _) = insert(c, path, right);
+    main(1, 4, path, right, 2, huge, c, before, after, 0);
+}

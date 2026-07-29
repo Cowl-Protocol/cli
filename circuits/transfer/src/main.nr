@@ -511,3 +511,373 @@ fn two_real_inputs_consolidate_and_conserve() {
 fn two_real_inputs_cannot_mint() {
     run2(Case2 { sk: 9, in_value: [60, 40], out_value: [70, 31] });
 }
+
+// ---------------------------------------------------------------------------
+// Adversarial harness
+//
+// The tests above check that honest spends work and that a few obviously wrong
+// ones do not. That is the easy direction. The class of bug that empties a
+// shielded pool is the other one: a circuit that ACCEPTS a witness it should
+// reject, because a constraint everyone assumed was there is missing.
+//
+// Fuzzing `main`'s inputs cannot find that. A random witness fails membership
+// long before it reaches anything interesting, so the fuzzer only ever
+// re-confirms that garbage is rejected. What finds it is a witness that is
+// perfect in every respect except one, aimed at exactly one constraint.
+//
+// So every test below starts from `honest()`, bends a single field, and repairs
+// anything downstream that the bend invalidated. If the circuit still accepts
+// it, the constraint under test does not exist. That discipline is also what
+// makes audits/circuits/mutants.sh meaningful: delete the paired constraint and
+// the witness becomes fully valid, so the should_fail test starts passing and
+// nargo reports it.
+// ---------------------------------------------------------------------------
+
+struct Witness {
+    sk: Field,
+    token: Field,
+    in_value: [Field; N_IN],
+    in_blinding: [Field; N_IN],
+    in_leaf_index: [Field; N_IN],
+    in_path: [[Field; TREE_DEPTH]; N_IN],
+    in_right: [[bool; TREE_DEPTH]; N_IN],
+    out_mpk: [Field; N_OUT],
+    out_value: [Field; N_OUT],
+    out_blinding: [Field; N_OUT],
+    out_path: [[Field; TREE_DEPTH]; N_OUT],
+    out_right: [[bool; TREE_DEPTH]; N_OUT],
+    membership_root: Field,
+    nullifiers: [Field; N_IN],
+    out_commitments: [Field; N_OUT],
+    old_root: Field,
+    new_root: Field,
+    insert_index: Field,
+    public_token: Field,
+    public_value: Field,
+    fee: Field,
+    recipient: Field,
+    relayer: Field,
+    chain_id: Field,
+}
+
+fn submit(w: Witness) {
+    main(
+        w.sk,
+        w.token,
+        w.in_value,
+        w.in_blinding,
+        w.in_leaf_index,
+        w.in_path,
+        w.in_right,
+        w.out_mpk,
+        w.out_value,
+        w.out_blinding,
+        w.out_path,
+        w.out_right,
+        w.membership_root,
+        w.nullifiers,
+        w.out_commitments,
+        w.old_root,
+        w.new_root,
+        w.insert_index,
+        w.public_token,
+        w.public_value,
+        w.fee,
+        w.recipient,
+        w.relayer,
+        w.chain_id,
+    );
+}
+
+/// A complete, valid spend: one note worth 100 at leaf 0 of a one-leaf tree,
+/// split into two private outputs at leaves 1 and 2. The token is deliberately
+/// non-zero so a test cannot pass by accident on a field that happens to be 0.
+fn honest() -> Witness {
+    let sk = 7;
+    let token = 0x1111;
+    let (nk, mpk) = derive_keys(sk);
+    let zeros = notes::zeros_path();
+    let flat = [false; TREE_DEPTH];
+
+    let in_blinding = [11, 12];
+    let input = commit(mpk, token, 100, in_blinding[0]);
+    let membership_root = insert(input, zeros, flat).1;
+
+    let out_mpk = [mpk, 0x999];
+    let out_value = [60, 40];
+    let out_blinding = [21, 22];
+    let out_commitments = [
+        commit(out_mpk[0], token, out_value[0], out_blinding[0]),
+        commit(out_mpk[1], token, out_value[1], out_blinding[1]),
+    ];
+
+    let (path1, right1) = append_path_1(input);
+    let (path2, right2) = append_path_2(input, out_commitments[0]);
+    let new_root = insert(out_commitments[1], path2, right2).1;
+
+    // A dummy's leaf index is unconstrained by design. The client fills it with
+    // a random field element, far outside the 0..2^20 range real leaves occupy.
+    let dummy_index = 0x1234567890abcdef;
+
+    Witness {
+        sk: sk,
+        token: token,
+        in_value: [100, 0],
+        in_blinding: in_blinding,
+        in_leaf_index: [0, dummy_index],
+        in_path: [zeros, zeros],
+        in_right: [flat, flat],
+        out_mpk: out_mpk,
+        out_value: out_value,
+        out_blinding: out_blinding,
+        out_path: [path1, path2],
+        out_right: [right1, right2],
+        membership_root: membership_root,
+        nullifiers: [nullify(nk, 0), nullify(nk, dummy_index)],
+        out_commitments: out_commitments,
+        old_root: membership_root,
+        new_root: new_root,
+        insert_index: 1,
+        public_token: 0,
+        public_value: 0,
+        fee: 0,
+        recipient: 0xbeef,
+        relayer: 0xcafe,
+        chain_id: 46630,
+    }
+}
+
+/// Rebuild the output commitments from whatever the output notes now say, then
+/// repair the append paths and the new root. A test that rewrites an output can
+/// call this and stay valid everywhere except where it meant to deviate.
+fn recommit(w: Witness) -> Witness {
+    let mut w = w;
+    w.out_commitments = [
+        commit(w.out_mpk[0], w.token, w.out_value[0], w.out_blinding[0]),
+        commit(w.out_mpk[1], w.token, w.out_value[1], w.out_blinding[1]),
+    ];
+    reseal(w)
+}
+
+/// Repair the append paths and the new root for whatever `out_commitments`
+/// currently holds. Assumes the input note at leaf 0 is unchanged.
+fn reseal(w: Witness) -> Witness {
+    let mut w = w;
+    let mpk = derive_keys(w.sk).1;
+    let input = commit(mpk, w.token, w.in_value[0], w.in_blinding[0]);
+    let (path1, right1) = append_path_1(input);
+    let (path2, right2) = append_path_2(input, w.out_commitments[0]);
+    w.out_path = [path1, path2];
+    w.out_right = [right1, right2];
+    w.new_root = insert(w.out_commitments[1], path2, right2).1;
+    w
+}
+
+/// The baseline must be accepted, or every should_fail below proves nothing:
+/// a witness that was already invalid would be rejected whatever the circuit
+/// did with the field under test.
+#[test]
+fn the_adversarial_baseline_is_a_valid_spend() {
+    submit(honest());
+}
+
+// ------------------------------------------------------------ T3, the big one
+
+/// Membership is proven from the path. The nullifier is computed from
+/// `in_leaf_index`. Tie them together or the same note can be spent forever:
+/// prove leaf 0, burn the nullifier for leaf 5, come back and burn leaf 6.
+///
+/// The witness below is valid in every other respect — the nullifier really is
+/// the one for leaf 5 — so the only thing standing in its way is the constraint
+/// this test is named for.
+#[test(should_fail_with = "leaf index contradicts path")]
+fn a_real_input_cannot_nullify_a_position_it_never_proved() {
+    let mut w = honest();
+    let nk = derive_keys(w.sk).0;
+    w.in_leaf_index[0] = 5;
+    w.nullifiers[0] = nullify(nk, 5);
+    submit(w);
+}
+
+// ------------------------------------------------------------ T6, the mint
+
+/// Conservation is checked over `out_value`. The leaf that enters the tree is
+/// `out_commitments[j]`. Bind the two or the accounting sees 60 while the note
+/// actually in the pool is worth a billion.
+#[test(should_fail)]
+fn an_output_note_cannot_be_worth_more_than_it_accounts_for() {
+    let mut w = honest();
+    // out_value stays [60, 40], so conservation is untouched. Only the leaf
+    // changes, and the tree is resealed around it so the append and the new
+    // root remain correct.
+    w.out_commitments[0] = commit(w.out_mpk[0], w.token, 1_000_000_000, w.out_blinding[0]);
+    submit(reseal(w));
+}
+
+// ------------------------------------------------------------ T4
+
+/// The nullifier has to be the one this spending key produces for this leaf.
+/// Otherwise a spender publishes a nullifier nobody can correlate, and the note
+/// stays spendable after it has been spent.
+#[test(should_fail)]
+fn a_nullifier_must_be_the_one_this_key_produces() {
+    let mut w = honest();
+    w.nullifiers[0] = 0xdead;
+    submit(w);
+}
+
+// ------------------------------------------------------------ T8, T9
+
+/// The chain tells the circuit where the outputs land. If the circuit does not
+/// hold the prover to it, the tree the pool believes it has and the tree the
+/// proof built diverge, and every later membership proof is against a root
+/// nobody can reproduce.
+#[test(should_fail_with = "outputs are not appended in order")]
+fn outputs_cannot_land_anywhere_but_the_index_the_chain_named() {
+    let mut w = honest();
+    w.insert_index = 5;
+    submit(w);
+}
+
+/// `new_root` is what the pool stores. It has to be the root the insertions
+/// actually produced, or a prover hands the pool a tree of their own design.
+#[test(should_fail_with = "new root does not follow from the insertions")]
+fn the_new_root_must_be_the_one_the_insertions_produce() {
+    let mut w = honest();
+    w.new_root = 0xdead;
+    submit(w);
+}
+
+// ------------------------------------------------------------ T10, T11
+
+/// Conservation is field arithmetic, so it can be satisfied by wrapping. Here
+/// the outputs claim 200 against an input of 100 and the books are balanced
+/// with a public leg of -100. In the field that adds up exactly. The range
+/// check on the public leg is what makes it unreachable.
+///
+/// The pool's turnstile is the second line if it ever were reachable: it would
+/// see an outflow of p-100 and refuse it against `pooledValue`.
+#[test(should_fail)]
+fn the_public_leg_cannot_wrap_the_field_to_mint_change() {
+    let mut w = honest();
+    w.out_value = [200, 0];
+    w.public_value = 0 - 100;
+    w.public_token = w.token; // value leaves, so the asset must be named
+    submit(recommit(w));
+}
+
+/// The same wrap, through the fee instead of the payout.
+#[test(should_fail)]
+fn the_fee_cannot_wrap_the_field_to_mint_change() {
+    let mut w = honest();
+    w.out_value = [200, 0];
+    w.fee = 0 - 100;
+    w.public_token = w.token;
+    submit(recommit(w));
+}
+
+// ------------------------------------------------------------ T1
+
+/// Two inputs of -100 and 200 sum to 100 in the field, so conservation holds
+/// while one input claims a value the pool never held. The range check on every
+/// input is the only thing between that and a mint.
+#[test(should_fail)]
+fn an_input_cannot_wrap_the_field_to_fake_its_value() {
+    submit(honest2([0 - 100, 200], [100, 0]));
+}
+
+/// And the honest version of the same shape, so the test above is known to fail
+/// for its range check rather than because two real inputs never worked.
+#[test]
+fn two_real_inputs_of_ordinary_size_are_accepted() {
+    submit(honest2([100, 200], [300, 0]));
+}
+
+/// Two funded notes at leaves 0 and 1, spent together into leaves 2 and 3.
+fn honest2(in_value: [Field; N_IN], out_value: [Field; N_OUT]) -> Witness {
+    let sk = 9;
+    let token = 0x2222;
+    let (nk, mpk) = derive_keys(sk);
+    let zeros = notes::zeros_path();
+    let flat = [false; TREE_DEPTH];
+
+    let in_blinding = [101, 102];
+    let in0 = commit(mpk, token, in_value[0], in_blinding[0]);
+    let in1 = commit(mpk, token, in_value[1], in_blinding[1]);
+    let (path_app1, right_app1) = append_path_1(in0);
+    let membership_root = insert(in1, path_app1, right_app1).1;
+
+    let mut path_in0 = zeros;
+    path_in0[0] = in1;
+    let mut path_in1 = zeros;
+    path_in1[0] = in0;
+    let mut right_in1 = flat;
+    right_in1[0] = true;
+
+    let out_mpk = [mpk, 0x777];
+    let out_blinding = [201, 202];
+    let out0 = commit(out_mpk[0], token, out_value[0], out_blinding[0]);
+    let out1 = commit(out_mpk[1], token, out_value[1], out_blinding[1]);
+
+    let (path_out0, right_out0) = append_path_2(in0, in1);
+    let mut path_out1 = zeros;
+    path_out1[0] = out0;
+    path_out1[1] = Poseidon2::hash([in0, in1], 2);
+    let mut right_out1 = flat;
+    right_out1[0] = true;
+    right_out1[1] = true;
+    let new_root = insert(out1, path_out1, right_out1).1;
+
+    Witness {
+        sk: sk,
+        token: token,
+        in_value: in_value,
+        in_blinding: in_blinding,
+        in_leaf_index: [0, 1],
+        in_path: [path_in0, path_in1],
+        in_right: [flat, right_in1],
+        out_mpk: out_mpk,
+        out_value: out_value,
+        out_blinding: out_blinding,
+        out_path: [path_out0, path_out1],
+        out_right: [right_out0, right_out1],
+        membership_root: membership_root,
+        nullifiers: [nullify(nk, 0), nullify(nk, 1)],
+        out_commitments: [out0, out1],
+        old_root: membership_root,
+        new_root: new_root,
+        insert_index: 2,
+        public_token: 0,
+        public_value: 0,
+        fee: 0,
+        recipient: 0,
+        relayer: 0,
+        chain_id: 46630,
+    }
+}
+
+// ------------------------------------------------------- where the line is not
+
+/// The circuit does not require the two input slots to be different notes.
+///
+/// Both slots below point at leaf 0 and spend the same note. Membership holds
+/// twice, both slots nullify to the same value, and conservation happily sees
+/// 200 come out of a note worth 100. **The circuit accepts this**, which is
+/// what the test asserts.
+///
+/// `ShieldedPool.spend` is what refuses it: `nullifiers[0] == nullifiers[1]`
+/// reverts with `RepeatedNullifier`, before the verifier is called at all. So
+/// the property holds for the system as deployed, and this test records exactly
+/// which half of the system holds it. If that contract check were ever removed
+/// or reordered, this is a mint, and this test is the thing that says so.
+#[test]
+fn one_note_can_fill_both_input_slots_and_only_the_pool_says_no() {
+    let mut w = honest();
+    let nk = derive_keys(w.sk).0;
+    w.in_value = [100, 100];
+    w.in_blinding = [11, 11]; // the same note, twice
+    w.in_leaf_index = [0, 0];
+    w.nullifiers = [nullify(nk, 0), nullify(nk, 0)];
+    w.out_value = [200, 0];
+    submit(recommit(w));
+}

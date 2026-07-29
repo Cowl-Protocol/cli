@@ -22,6 +22,9 @@
     "test:relay": "node scripts/test-relaydefaults.mjs",
     "test:invariant": "cd contracts && forge test --match-path \"test/ShieldedPoolInvariants.t.sol\"",
     "test:mutants": "./audits/invariant/mutants.sh",
+    "test:circuits": "for p in notes shield transfer; do (cd circuits/$p && nargo test) || exit 1; done",
+    "test:circuit-mutants": "node audits/circuits/mutants.mjs",
+    "test:publicinputs": "node audits/circuits/publicinputs.mjs",
     "watch": "node scripts/watch-pool.mjs",
     "prepublishOnly": "node ./build.mjs"
   },

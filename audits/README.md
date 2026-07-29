@@ -22,16 +22,19 @@ to the scanners.
 | | Step | Artifact |
 |---|---|---|
 | ☑ | GitHub Actions workflow (cli, app) | [ci/](ci/README.md) |
-| ☐ | Circuit adversarial harness | — |
+| ☑ | Circuit adversarial harness | [circuits/](circuits/README.md) |
 | ☑ | Foundry invariant suite | [invariant/](invariant/README.md) |
+
+**Phase 0 is complete.**
 
 The plan calls the middle step "Noir fuzz harnesses" and describes it as giving
 the existing `#[test]` functions arguments so `nargo` fuzzes them. **That is not
-sufficient and the step is deliberately renamed.** Fuzzing the inputs of `main`
+sufficient and the step was deliberately renamed.** Fuzzing the inputs of `main`
 only demonstrates that valid witnesses are accepted. The class of bug that
 empties a pool is the opposite one, a circuit that accepts a witness it should
-reject, and reaching it needs adversarial witness generators, `should_fail`
-tests, and wider differential coverage in `crosscheck.mts`.
+reject, and reaching it needs adversarial witness generators and `should_fail`
+tests. The reasoning and what was built instead are in
+[circuits/](circuits/README.md).
 
 `gh`, `act` and `actionlint` are all absent from the build machine, so workflows
 are written locally, every command in them is proven locally, and the workflows
@@ -119,6 +122,7 @@ pool defence, each caught by the invariant that names it.
 | 2026-07-28 | Governance & turnstile monitoring — state watcher, recorded baseline, response playbook | Both live pools (mainnet 4663, testnet 46630) | live chain state | Turnstile exact to the wei on every token that entered through `shield()`; no pending verifier swaps; `npm run watch` | [monitoring/](monitoring/README.md) |
 | 2026-07-29 | Invariant suite — six pool properties under randomised call sequences, verifier stubbed to accept everything | `ShieldedPool.sol` | `5eb31a8` | All six held across 245,760 calls. Suite proven able to fail: 6/6 mutations caught. 2 Informational, both unreachable through a sound verifier | [invariant/](invariant/README.md) |
 | 2026-07-29 | Continuous integration — build, typecheck, contracts, circuits and the mutation harness on every push, both repos | `Cowl-Protocol/cli`, `Cowl-Protocol/app` | `cf9fdb6`, `b600bbc` | 5 jobs, all green on the first real run. Every action SHA-pinned, no gate touching live infrastructure. 1 Informational (the app's lint script has never worked) | [ci/](ci/README.md) |
+| 2026-07-29 | Circuit adversarial harness — witnesses valid in every respect but one, aimed at each constraint in turn, plus the public-input binding against the pool | `transfer`, `shield`, `notes` | `26511b2` | Every constraint proven load-bearing: 17 deleted one at a time, 17 caught. No missing constraint found; circuits unchanged. 2 Informational | [circuits/](circuits/README.md) |
 
 ## Conventions
 
@@ -158,10 +162,12 @@ each finding, so a reader can trace finding to fix without trusting the summary.
 ```
 npm run test:invariant                 # the six pool invariants
 npm run test:mutants                   # proves the invariant suite can fail
+npm run test:circuits                  # notes, shield and transfer
+npm run test:circuit-mutants           # proves the circuit tests can fail
+npm run test:publicinputs              # circuit public inputs vs the pool's
 npm run test:relay -- --static         # the half of the relay check CI runs
 ./audits/static/scan.sh                # regenerates both scanner reports
 cd contracts && forge test             # the whole contract suite
-cd circuits/transfer && nargo test     # the transfer circuit
 ```
 
 Two of these read live infrastructure and are deliberately kept out of CI, so

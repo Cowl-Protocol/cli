@@ -93,3 +93,14 @@ jobs:
             (cd "$pkg" && nargo test)
             echo "::endgroup::"
           done
+      # Deletes one constraint at a time and requires the paired adversarial test
+      # to notice. Without it, a should_fail test can keep passing for a reason
+      # that has nothing to do with the constraint it is named after, and the
+      # constraint can be removed with the suite still green.
+      - run: node audits/circuits/mutants.mjs
+      # The compiled artifacts are gitignored, so build the two circuits the pool
+      # calls before comparing their public inputs against it.
+      - name: public inputs match the pool
+        run: |
+          (cd circuits && nargo compile --package transfer && nargo compile --package shield)
+          node audits/circuits/publicinputs.mjs
