@@ -3,7 +3,11 @@
 # Static analysis of the hand-written contracts. Regenerates both reports in
 # this directory. Run from anywhere:
 #
-#     cli/audits/static/scan.sh
+#     cli/audits/static/scan.sh            # rewrite the committed reports
+#     cli/audits/static/scan.sh /tmp/out   # write somewhere else instead
+#
+# The second form is what check.mjs uses, so a CI run can scan without touching
+# the reports that are committed and triaged by hand.
 #
 # Requires slither and aderyn on PATH. Both were installed at the time of
 # writing (slither 0.11.5, aderyn 0.6.8, forge 1.7.1).
@@ -38,6 +42,9 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONTRACTS="$(cd "$HERE/../../contracts" && pwd)"
+OUT="${1:-$HERE}"
+mkdir -p "$OUT"
+OUT="$(cd "$OUT" && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -46,8 +53,11 @@ trap 'rm -rf "$WORK"' EXIT
 TARGETS="src/ShieldedPool.sol,src/CowlTradeAdapter.sol"
 
 # --- aderyn: reads the real tree, just needs the scope narrowed -------------
+# Twice, because the markdown is what a person reads and the JSON is what
+# check.mjs compares against the baseline. Same scan, two renderings.
 echo "==> aderyn"
-aderyn "$CONTRACTS" -i "$TARGETS" -o "$HERE/aderyn-report.md"
+aderyn "$CONTRACTS" -i "$TARGETS" -o "$OUT/aderyn-report.md"
+aderyn "$CONTRACTS" -i "$TARGETS" -o "$OUT/aderyn-raw.json"
 
 # --- slither: needs the shimmed copy ---------------------------------------
 echo "==> slither"
@@ -87,21 +97,22 @@ ln -s "$CONTRACTS/lib" "$WORK/lib"
 # slither refuses to overwrite an existing --json target and only says so on
 # stderr, so a re-run would otherwise leave the previous scan in place while
 # looking like it succeeded.
-rm -f "$HERE/slither-raw.json"
+rm -f "$OUT/slither-raw.json"
 
 # slither exits non-zero whenever it finds anything, which is always.
-( cd "$WORK" && slither . --json "$HERE/slither-raw.json" 2>"$HERE/slither-report.txt" ) || true
+( cd "$WORK" && slither . --json "$OUT/slither-raw.json" 2>"$OUT/slither-report.txt" ) || true
 
-if [ ! -s "$HERE/slither-raw.json" ]; then
-    echo "slither produced no JSON — see $HERE/slither-report.txt" >&2
+if [ ! -s "$OUT/slither-raw.json" ]; then
+    echo "slither produced no JSON — see $OUT/slither-report.txt" >&2
     exit 1
 fi
 
 echo
 echo "Wrote:"
-echo "  $HERE/aderyn-report.md"
-echo "  $HERE/slither-raw.json"
-echo "  $HERE/slither-report.txt"
+echo "  $OUT/aderyn-report.md"
+echo "  $OUT/aderyn-raw.json"
+echo "  $OUT/slither-raw.json"
+echo "  $OUT/slither-report.txt"
 echo
 echo "Triage and verdicts live in $HERE/README.md — a finding is not a defect"
 echo "until it is written up there."

@@ -18,6 +18,7 @@ run on every push to `main` and on every pull request.
 | 🟢 | cli · forge test | 74 contract tests from a clean clone | green |
 | 🟢 | cli · invariant suite can fail | the pool mutation harness, 6/6 | green |
 | 🟢 | cli · nargo test | 32 circuit tests, the circuit mutation harness 17/17, public inputs vs the pool | green |
+| 🟢 | cli · static analysis | slither 0.11.5 and aderyn 0.6.8 against the recorded baseline, fails on anything untriaged | green |
 | 🟢 | app · typecheck, offline checks, build | types, four offline verify scripts, production build | green |
 | 🟢 | Supply chain | every action pinned to a full commit SHA, `contents: read`, no secrets | green |
 | 🟡 | I-01 · the app's `lint` script has never worked | eslint 9 installed, no config file of any kind | open, deliberately not a gate |
@@ -76,10 +77,11 @@ only thing that catches a relayer daemon left running an older build, and
 `npm run watch` is the only thing that reads the money. Both stay manual. Both
 are listed in [`../README.md`](../README.md).
 
-## cli — four jobs
+## cli — five jobs
 
 | Job | Runs | Proven locally |
 |---|---|---|
+| `scanners` | `audits/static/check.mjs` — slither + aderyn against the baseline | 23 fingerprints matched; proven to bite by planting an unused state variable |
 | `node` | `npm ci`, `typecheck`, `build`, `npm test`, `test:relay -- --static` | lockfile in sync via `npm ci --dry-run`; typecheck clean; `built dist/cli.mjs`; denominations all green; relay static half all green |
 | `contracts` | `forge test` | 74 passed, 0 failed |
 | `mutants` | `audits/invariant/mutants.sh` | 6/6 mutants caught, source restored |

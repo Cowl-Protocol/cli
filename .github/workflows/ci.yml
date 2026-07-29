@@ -71,6 +71,38 @@ jobs:
       # that no longer constrains anything and the suite would stay green.
       - run: ./audits/invariant/mutants.sh
 
+  scanners:
+    name: static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      # slither compiles through crytic-compile, which shells out to forge and
+      # lets forge fetch its own solc. No separate solc install.
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      # Both scanners are pinned to the exact versions the baseline was recorded
+      # against. A scanner upgrade changes what it reports, which would read as a
+      # wall of new findings and blow the baseline apart. Upgrading is a
+      # deliberate act: bump the pin, re-triage, re-record.
+      - run: pip install slither-analyzer==0.11.5
+      - name: install aderyn 0.6.8
+        run: |
+          set -euo pipefail
+          url=https://github.com/Cyfrin/aderyn/releases/download/aderyn-v0.6.8/aderyn-x86_64-unknown-linux-gnu.tar.xz
+          curl -sSL -o aderyn.tar.xz "$url"
+          echo "ffd6ca658962e211a3ac821c646f69c8e14bf1b1001cbfe091bcd4535a691e46  aderyn.tar.xz" | sha256sum -c -
+          tar -xJf aderyn.tar.xz
+          install -m755 aderyn-x86_64-unknown-linux-gnu/aderyn /usr/local/bin/aderyn
+          rm -rf aderyn.tar.xz aderyn-x86_64-unknown-linux-gnu
+      # Fails on findings nobody has triaged, not on findings. Both scanners
+      # report something on every run and always will; the gate is drift from
+      # the recorded baseline.
+      - run: node audits/static/check.mjs
+
   circuits:
     name: nargo test
     runs-on: ubuntu-latest

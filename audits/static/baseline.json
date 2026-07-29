@@ -1,0 +1,30 @@
+{
+  "note": "Accepted static-analysis findings. Every one is triaged in README.md. Regenerate with: node audits/static/check.mjs --update",
+  "slitherVersion": "0.11.5",
+  "aderynVersion": "aderyn 0.6.8",
+  "findings": {
+    "aderyn|centralization-risk|src/ShieldedPool.sol": 5,
+    "aderyn|push-zero-opcode|src/CowlTradeAdapter.sol": 1,
+    "aderyn|push-zero-opcode|src/ShieldedPool.sol": 1,
+    "aderyn|state-no-address-check|src/ShieldedPool.sol": 2,
+    "aderyn|unsafe-erc20-operation|src/CowlTradeAdapter.sol": 4,
+    "aderyn|unsafe-erc20-operation|src/ShieldedPool.sol": 2,
+    "aderyn|unspecific-solidity-pragma|src/CowlTradeAdapter.sol": 1,
+    "aderyn|unspecific-solidity-pragma|src/ShieldedPool.sol": 1,
+    "slither|arbitrary-send-eth|src/CowlTradeAdapter.sol|function trade": 1,
+    "slither|arbitrary-send-eth|src/ShieldedPool.sol|function _payOut": 1,
+    "slither|cyclomatic-complexity|src/CowlTradeAdapter.sol|function trade": 1,
+    "slither|cyclomatic-complexity|src/ShieldedPool.sol|function shield": 1,
+    "slither|cyclomatic-complexity|src/ShieldedPool.sol|function spend": 1,
+    "slither|low-level-calls|src/CowlTradeAdapter.sol|function trade": 1,
+    "slither|low-level-calls|src/ShieldedPool.sol|function _payOut": 1,
+    "slither|missing-zero-check|src/CowlTradeAdapter.sol|variable _router": 1,
+    "slither|missing-zero-check|src/CowlTradeAdapter.sol|variable _weth": 1,
+    "slither|pragma|src/CowlTradeAdapter.sol|pragma ^0.8.27": 1,
+    "slither|reentrancy-events|src/CowlTradeAdapter.sol|function trade": 1,
+    "slither|reentrancy-events|src/ShieldedPool.sol|function shield": 1,
+    "slither|solc-version|src/ShieldVerifier.sol|pragma >=0.8.21": 1,
+    "slither|timestamp|src/CowlTradeAdapter.sol|function trade": 1,
+    "slither|timestamp|src/ShieldedPool.sol|function executeVerifierSwap": 1
+  }
+}

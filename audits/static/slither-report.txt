@@ -1,6 +1,6 @@
-'forge clean' running (wd: /private/var/folders/0b/wp2plrm16cx83q02ffz68rmh0000gn/T/tmp.0gdjaBvtw0)
+'forge clean' running (wd: /private/var/folders/0b/wp2plrm16cx83q02ffz68rmh0000gn/T/tmp.ZX06ulqlUk)
 'forge config --json' running
-'forge build --build-info --skip ./test/** ./script/** --force' running (wd: /private/var/folders/0b/wp2plrm16cx83q02ffz68rmh0000gn/T/tmp.0gdjaBvtw0)
+'forge build --build-info --skip ./test/** ./script/** --force' running (wd: /private/var/folders/0b/wp2plrm16cx83q02ffz68rmh0000gn/T/tmp.ZX06ulqlUk)
 
 Detector: arbitrary-send-eth
 CowlTradeAdapter.trade(CowlTradeAdapter.TradeParams) (src/CowlTradeAdapter.sol#132-204) sends eth to arbitrary user

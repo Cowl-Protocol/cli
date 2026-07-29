@@ -28,6 +28,7 @@ Test baseline at the same commit, both green before and after this scan:
 | | Finding | Severity | Where it stands |
 |---|---|---|---|
 | 🟢 | Path to deposited funds | — | **Neither tool found one.** Every finding read against source |
+| 🟢 | Regression gate | — | Runs on every push; fails on anything untriaged. Proven to bite — see below |
 | 🟡 | M-01 · verifier-swap escape hatch, owner is a single EOA | Medium | Mitigated — watched by [`../monitoring/`](../monitoring/README.md); scheduling and a multisig still open |
 | 🟡 | L-01 · adapter refund `transfer` return unchecked | Low | Fixed in `8b1c58f`, **not deployed** — redeploy deferred, and the branch still has no unit test |
 | 🟡 | L-02 · adapter `approve` returns unchecked, 3 sites | Low | Fixed in `8b1c58f`, **not deployed** — fails closed either way, pinned by failing-first tests |
@@ -39,6 +40,65 @@ Test baseline at the same commit, both green before and after this scan:
 deployed adapter predates the fixes, deliberately. Nothing on chain carries them
 yet, so the source and the running contract differ, and this table says so rather
 than letting a green tick imply otherwise. They ride the next adapter redeploy.
+
+## The gate — `check.mjs`
+
+The scan became a control on 2026-07-29. It runs in CI on every push.
+
+**It cannot fail on "the scanner found something".** Both scanners find
+something on every run and always will: 15 slither findings and 17 aderyn
+instances survive the current triage, every one read against source and written
+up below. A gate that is red forever is a gate everyone learns to route around.
+
+So the gate compares against a recorded baseline and **fails on anything new**,
+at any severity. Same shape as the pool watcher in
+[`../monitoring/`](../monitoring/README.md): the accepted state is committed, and
+the check is about drift from it.
+
+```
+npm run test:scanners                       # scan and compare
+node audits/static/check.mjs --update       # re-record after a triage pass
+```
+
+Exit codes: **0** nothing new · **1** something untriaged, or the baseline is
+stale · **2** could not check, a scanner is missing or produced nothing. The last
+one is deliberately distinct, for the same reason the pool watcher separates it:
+a check that cannot tell "nothing new" from "could not tell" is not a check.
+
+**Not severity-gated, on purpose.** The plan asked for the build to fail on high
+severity. That is the wrong line here and this report is the evidence: the two
+findings both tools rank highest are `arbitrary-send-eth`, and both were read
+against source and rebutted below. Gating on severity would fail the build on
+those forever while waving through a fresh Informational nobody has looked at.
+Untriaged is the property that matters.
+
+**The fingerprint carries no line numbers.** A finding is identified by detector
+plus the contract and function it lives in. Line numbers move whenever anyone
+edits anything above them, and a gate that goes red on an unrelated edit is the
+same always-red gate by a slower route. The cost is that a second instance of an
+already-accepted pattern in the same place would not register, so the count per
+fingerprint is tracked too — one more `missing-zero-check` in a constructor that
+already has one still fails.
+
+**Both scanners are pinned**, to slither 0.11.5 and aderyn 0.6.8, the versions
+the baseline was recorded against. A baseline is only meaningful against a fixed
+scanner: a new version reports differently, which would arrive as a wall of new
+findings and blow the baseline apart. Upgrading is a deliberate act — bump the
+pin, re-triage, re-record. CI verifies aderyn's download against a sha256 taken
+from the release and checked against the tarball rather than copied.
+
+**Proven to bite.** An unused state variable was added to `ShieldedPool.sol` and
+the gate went red with three new findings, from both scanners independently:
+
+```
+NEW — not in the baseline, nobody has read these yet:
+  aderyn|unused-state-variable|src/ShieldedPool.sol  (x1)
+  slither|constable-states|src/ShieldedPool.sol|variable _scratch  (x1)
+  slither|unused-state|src/ShieldedPool.sol|variable _scratch  (x1)
+```
+
+The contract was then restored byte-identical. Baseline:
+[`baseline.json`](baseline.json), 23 fingerprints over 32 instances.
 
 ### Before and after
 

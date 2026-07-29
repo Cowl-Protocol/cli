@@ -12,7 +12,7 @@ shows clean results is not evidence of anything.
 |---|---|---|---|
 | 🟢 | Pool accounting | Six invariants held across 245,760 randomised calls. Turnstile exact to the wei on every token that ever entered, on both live pools | [invariant/](invariant/README.md) · [monitoring/](monitoring/README.md) |
 | 🟢 | Circuit constraints | Every constraint proven load-bearing: 17 deleted one at a time, 17 caught. Public inputs match the pool on all 14 of `spend` and 6 of `shield` | [circuits/](circuits/README.md) |
-| 🟢 | Contracts, static | Neither scanner found a path to deposited funds. Every finding triaged against source | [static/](static/README.md) |
+| 🟢 | Contracts, static | Neither scanner found a path to deposited funds. Every finding triaged against source, and a gate on every push now fails on anything untriaged | [static/](static/README.md) |
 | 🟢 | Test integrity | Both suites carry a mutation harness, so a test that stopped constraining anything would show up rather than stay green | [invariant/](invariant/README.md) · [circuits/](circuits/README.md) |
 | 🟢 | Continuous integration | 5 jobs across both repos, green since the first run, every action SHA-pinned | [ci/](ci/README.md) |
 | 🟡 | Governance | Pool is not a proxy and cannot be edited. The one lever is a 7-day timelocked verifier swap, held by a single deployer EOA. Watched, not yet scheduled, not yet a multisig | [static/](static/README.md) · [monitoring/](monitoring/README.md) |
@@ -78,12 +78,19 @@ that first run.
 | ☐ | OpenSSF Scorecard | — |
 | ☐ | Dependabot | — |
 | ☐ | Socket | — |
-| ☐ | Scanners wired into CI, build fails on high severity | — |
+| ☑ | Scanners wired into CI, build fails on anything untriaged | [static/](static/README.md) |
 
-Both scanners run today from [`static/scan.sh`](static/scan.sh) and their output
-is triaged by hand. Wiring them into every push is now unblocked, since
-[ci/](ci/README.md) landed. The plan's own standard applies until then: a
-scanner nobody is forced to read is not a control.
+**The gate is stricter than the plan asked for.** The plan says the build should
+fail on any high-severity finding. That would be the wrong line here: tool
+severity is not report severity, and the two findings both scanners rank highest
+(`arbitrary-send-eth`) were read against source and rebutted. Meanwhile a fresh
+Informational nobody has looked at would sail through.
+
+So the gate fails on anything **untriaged** instead, at any severity, measured
+against a recorded baseline of the 23 accepted fingerprints. A new finding is
+red until someone reads it and writes a verdict. That is the plan's own standard
+— a scanner nobody is forced to read is not a control — applied to the thing it
+was actually about.
 
 ### Phase 2 — proof that the published package is the published source
 
@@ -192,6 +199,7 @@ npm run test:mutants                   # proves the invariant suite can fail
 npm run test:circuits                  # notes, shield and transfer
 npm run test:circuit-mutants           # proves the circuit tests can fail
 npm run test:publicinputs              # circuit public inputs vs the pool's
+npm run test:scanners                  # fails on any static finding nobody triaged
 npm run test:relay -- --static         # the half of the relay check CI runs
 ./audits/static/scan.sh                # regenerates both scanner reports
 cd contracts && forge test             # the whole contract suite
