@@ -58,6 +58,32 @@ npm run test:relayer-mutants    # proves each case constrains the defence it nam
 
 Both run offline against a stub chain, need no key, and are wired into CI.
 
+## Deployed
+
+**Both live relayers were moved onto these fixes on 2026-08-01.** `0.6.13`
+installed from a local `npm pack` tarball (sha256 `d596bfca…0bfde5`, verified
+identical on both ends), then `cowl-relayer` and `cowl-relayer-mainnet`
+restarted. `NRestarts=0` and no error, throw or unhandled rejection in either
+journal since.
+
+Verified as running rather than merely installed: a `/relay` carrying a
+100,000-digit `value` came back **400 `Bad value in relay payload.`**, which is
+the R-06 bound. The pre-fix daemon accepts that field for parsing and refuses
+later with 409, so the status code alone tells the two builds apart. Fee pricing
+still works on every live token — COWL at its one tier, USDG across three,
+testnet USDG across four — and `npm run test:relay` and `npm run watch` are both
+green against the deployed daemons.
+
+**Checked before deploying, not after:** the tier-spread guard was measured
+against both live venues first, on the question of whether it refuses anything
+that works today. It does not — COWL, AAPL and DIH each price at exactly one
+tier, so there is nothing to disagree with, and USDG's three real tiers agree to
+within 0.35%.
+
+**`npm` still serves 0.6.12, so `@latest` is currently a downgrade** that would
+silently undo all six fixes. Flagged in [`../../deploy/relayer/README.md`](../../deploy/relayer/README.md)
+until 0.6.13 is published.
+
 ## The method
 
 `startRelayServer` is imported from source and stood up on loopback. Only the

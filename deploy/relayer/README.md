@@ -148,6 +148,13 @@ never points users at a dead URL.
   It earns fees back on every relay.
 - **Margin**: change the take by editing `--margin` in the unit, then
   `sudo systemctl daemon-reload && sudo systemctl restart cowl-relayer`.
+- **⚠️ Right now `@latest` is a DOWNGRADE.** Both units were deployed on
+  **0.6.13 from a local `npm pack` tarball** on 2026-08-01, carrying the six
+  relayer fixes in `audits/relayer/README.md`. **npm still serves 0.6.12**, which
+  has none of them — so `npm install -g @cowlprotocol/cli@latest` would silently
+  put the box back on the pre-audit daemon, including the fee floor anyone could
+  set. Do not run the upgrade line below until 0.6.13 is published; after that,
+  it is correct again and this note comes out.
 - **Upgrade**: `sudo npm install -g @cowlprotocol/cli@latest`, then restart every
   relayer unit on the box. Do this whenever a release moves the gas figures,
   because the price a spend is quoted comes from the daemon's own copy of them —
