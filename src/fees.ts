@@ -6,8 +6,10 @@ export const FEES = [
   { name: "Unshield fee", rate: "~0.05%", when: "when moving out of the shielded pool", to: "fee collector" },
 ];
 
+// Destinations are settled; the proportions are not, so none are printed here.
+// A split that adds up is the kind of number people quote back, and inventing
+// one to fill a table is how a placeholder becomes a promise.
 export const FEE_SPLIT = [
-  { to: "Stakers", share: "50%" },
-  { to: "Buyback & burn", share: "30%" },
-  { to: "Treasury", share: "20%" },
+  { to: "Buyback & burn", purpose: "buys $COWL on the market and burns it" },
+  { to: "Treasury", purpose: "grants, audits, development" },
 ];

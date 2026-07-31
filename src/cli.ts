@@ -334,15 +334,6 @@ async function syncPoolQuietly(
 }
 
 /** Feature whose contract is not deployed on this network yet. */
-function pending(feature: string, which: keyof CowlContracts, net: NetworkDef): never {
-  warn(`${feature} is not live on ${bone(net.label)} yet.`);
-  console.log(`  ${muted(`No ${which} contract is deployed there.`)}`);
-  console.log(
-    `  ${muted(`Once it is:`)} ${dim(`cowl config set contracts.${which} 0x…`)}`,
-  );
-  process.exit(0);
-}
-
 // ---- init -------------------------------------------------------------------
 
 program
@@ -747,13 +738,12 @@ config
     row("explorer", net.explorer ? muted(net.explorer) : dim("unset"));
     row("pool", net.contracts.pool ?? dim("not deployed"));
     row("relayer", net.contracts.relayer ?? dim("not deployed"));
-    row("staking", net.contracts.staking ?? dim("not deployed"));
   });
 
 config
   .command("set")
   .description("set a config value on the active network")
-  .argument("<key>", "rpcUrl | chainId | explorer | contracts.pool | contracts.relayer | contracts.staking")
+  .argument("<key>", "rpcUrl | chainId | explorer | contracts.pool | contracts.relayer")
   .argument("<value>")
   .action((key: string, value: string) => {
     let cfg = loadConfig();
@@ -774,7 +764,7 @@ config
 config
   .command("unset")
   .description("drop an override and go back to the network's default")
-  .argument("<key>", "rpcUrl | chainId | explorer | contracts.pool | contracts.relayer | contracts.staking")
+  .argument("<key>", "rpcUrl | chainId | explorer | contracts.pool | contracts.relayer")
   .action((key: string) => {
     let cfg = loadConfig();
     try {
@@ -949,7 +939,7 @@ program
         console.log(`      ${muted(`${f.when} → ${f.to}`)}`);
       }
       heading("Where protocol fees go");
-      for (const s of FEE_SPLIT) row(s.to, acid(s.share));
+      for (const s of FEE_SPLIT) row(s.to, muted(s.purpose));
       console.log(`\n  ${dim("Indicative only — set by governance at launch.")}`);
     });
   });
@@ -996,7 +986,7 @@ function runStatus(showSplash = false): void {
           wallet: addr,
           viewKey: vkey ? { publicKey: vkey.publicKey, createdAt: vkey.createdAt } : null,
           network: { key: net.key, label: net.label, chainId: net.chainId, rpcUrl: net.rpcUrl, explorer: net.explorer, testnet: net.testnet },
-          contracts: { pool: c.pool ?? null, relayer: c.relayer ?? null, staking: c.staking ?? null },
+          contracts: { pool: c.pool ?? null, relayer: c.relayer ?? null },
           shieldedAccount: loadConfig().shieldedAccount ?? "key",
         },
         null,
@@ -1026,7 +1016,6 @@ function runStatus(showSplash = false): void {
   const contract = (v?: string) => (v ? acid(v) : dim("not deployed yet"));
   row("pool", contract(c.pool));
   row("relayer", contract(c.relayer));
-  row("staking", contract(c.staking));
 
   if (!addr) {
     console.log(`\n  ${muted("Start here:")} ${dim("cowl init")}`);
@@ -2619,12 +2608,6 @@ async function tradeOnChain(
     die((e as Error).message);
   }
 }
-
-program
-  .command("stake")
-  .description("stake $COWL to back the network")
-  .argument("<amount>")
-  .action(() => pending("Staking", "staking", ctx().net));
 
 // ---- default: bare `cowl` shows status --------------------------------------
 

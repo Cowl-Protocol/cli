@@ -107,8 +107,7 @@ export function setConfigValue(cfg: Config, key: string, value: string): Config 
       ov.explorer = value;
       break;
     case "contracts.pool":
-    case "contracts.relayer":
-    case "contracts.staking": {
+    case "contracts.relayer": {
       const which = key.split(".")[1] as keyof CowlContracts;
       ov.contracts = { ...(ov.contracts ?? {}), [which]: value as `0x${string}` };
       break;
@@ -122,7 +121,7 @@ export function setConfigValue(cfg: Config, key: string, value: string): Config 
     }
     default:
       throw new Error(
-        `Unknown config key "${key}". Try: shieldedAccount, rpcUrl, chainId, explorer, contracts.pool, contracts.relayer, contracts.staking`,
+        `Unknown config key "${key}". Try: shieldedAccount, rpcUrl, chainId, explorer, contracts.pool, contracts.relayer`,
       );
   }
 
@@ -154,8 +153,7 @@ export function unsetConfigValue(cfg: Config, key: string): Config {
       delete ov.explorer;
       break;
     case "contracts.pool":
-    case "contracts.relayer":
-    case "contracts.staking": {
+    case "contracts.relayer": {
       const which = key.split(".")[1] as keyof CowlContracts;
       const contracts = { ...(ov.contracts ?? {}) };
       delete contracts[which];
@@ -169,7 +167,7 @@ export function unsetConfigValue(cfg: Config, key: string): Config {
     }
     default:
       throw new Error(
-        `Unknown config key "${key}". Try: shieldedAccount, rpcUrl, chainId, explorer, contracts.pool, contracts.relayer, contracts.staking`,
+        `Unknown config key "${key}". Try: shieldedAccount, rpcUrl, chainId, explorer, contracts.pool, contracts.relayer`,
       );
   }
 

@@ -63,8 +63,8 @@ commitments, nullifiers, and proofs it can verify but not read.
 
 Shield once, then operate from inside the pool: private transfers to `zcowl1…` addresses, private
 trades that settle atomically, exits in shared denominations behind a relayer. Your book stays off
-the public explorer; the protocol fee flows to the fee collector and splits between stakers, the
-buyback & burn, and the treasury.
+the public explorer; the protocol fee flows to the fee collector and splits between the buyback &
+burn and the treasury.
 See [fee structure](https://cowlprotocol.com/docs/fee-structure) ·
 [fee collector](https://cowlprotocol.com/docs/fee-collector).
 
@@ -120,10 +120,9 @@ broadcast a transaction.
 | `cowl portfolio` | public + shielded holdings in one view |
 | `cowl token` | track ERC-20s in the portfolio |
 | `cowl balance` | native or `--token 0x…` balance |
-| **Relayer & staking** | |
+| **Relayer** | |
 | `cowl relay serve` | turn this wallet into a relayer, earn fees |
 | `cowl relay quote <url>` | ask a relayer its price per spend |
-| `cowl stake <amount>` | stake $COWL (lights up when staking deploys) |
 | **Network & info** | |
 | `cowl` / `cowl status` | offline overview of wallet, network, contracts |
 | `cowl network` | list / switch networks |
@@ -394,10 +393,6 @@ On networks with no pool contract, the full flow — shield, send, trade, unshie
 simulation: the cryptography is real and value is conserved, but nothing settles. Point a shared
 pool file with `COWL_POOL_DIR` to try a multi-party flow locally.
 
-```bash
-cowl stake <amount>             # stake $COWL (lights up when the staking contract deploys)
-```
-
 ---
 
 ## File locations
@@ -493,7 +488,6 @@ flowchart LR
     direction TB
     P["Shielded Pool"]
     RL["Gasless Relayer"]
-    ST["$COWL Staking"]
   end
 ```
 
@@ -506,9 +500,8 @@ flowchart LR
   POOL -->|private trade| POOL
   POOL -->|unshield| OUT["stealth address"]
   POOL -->|protocol fee| FC["Fee Collector"]
-  FC -->|50%| STK["stakers"]
-  FC -->|30%| BURN["buyback & burn"]
-  FC -->|20%| TRE["treasury"]
+  FC --> BURN["buyback & burn"]
+  FC --> TRE["treasury"]
 ```
 
 ## Links

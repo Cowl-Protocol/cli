@@ -24,8 +24,6 @@ export type CowlContracts = {
   poolDeployBlock?: bigint;
   /** Gasless relayer entrypoint. */
   relayer?: `0x${string}`;
-  /** $COWL staking contract. */
-  staking?: `0x${string}`;
 };
 
 export type NetworkDef = {
