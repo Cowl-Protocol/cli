@@ -17,7 +17,7 @@ shows clean results is not evidence of anything.
 | 🟢 | Continuous integration | 6 jobs in the cli plus the app's, green since the first run, every action SHA-pinned | [ci/](ci/README.md) |
 | 🟢 | Supply chain | Nothing in either tree reaches a user's keys: 37 advisories read, none reachable, with bundle evidence. One install script in what a user installs, and the CLI is proven to work without it. Gated on every push against a baseline | [supplychain/](supplychain/README.md) |
 | 🟢 | Gasless relayer | Answers, serves the right chain and pool, payout address matches the baseline, and its own float figure agrees with the chain. All 7 alarms proven to fire | [monitoring/](monitoring/README.md) |
-| 🟡 | App and CLI code | CodeQL runs on every push and weekly in both repositories, on the wider `security-extended` suite. It reports rather than gates, and nothing has been triaged yet | [ci/](ci/README.md) |
+| 🟢 | App and CLI code | CodeQL `security-extended` read on both repositories: 4 findings, 1 fixed, 3 rebutted with reasoning. Nothing in proving, note handling, key derivation or the wire format | [codeql/](codeql/README.md) |
 | 🟡 | Governance | Pool is not a proxy and cannot be edited. The one lever is a 7-day timelocked verifier swap, held by a single deployer EOA. Watched, not yet scheduled, not yet a multisig | [static/](static/README.md) · [monitoring/](monitoring/README.md) |
 | 🟡 | Trade adapter | L-01 and L-02 are fixed in source; the deployed adapter predates the fixes because a redeploy was deliberately deferred | [static/](static/README.md) |
 | 🟡 | Circuit residuals | Two properties the circuits do not carry alone. Both are held by the pool or need a token that does not exist. Closing either costs a timelocked verifier swap | [circuits/](circuits/README.md) |
@@ -77,13 +77,21 @@ that first run.
 |---|---|---|
 | ☑ | Slither, every finding triaged against source | [static/](static/README.md) |
 | ☑ | Aderyn, same | [static/](static/README.md) |
-| ☐ | CodeQL (app, cli) | workflow in place, triage pending |
+| ☑ | CodeQL (app, cli) | [codeql/](codeql/README.md) |
 | ☑ | OpenSSF Scorecard | [supplychain/](supplychain/README.md) |
 | ☑ | Dependabot | [supplychain/](supplychain/README.md) |
 | ☐ | Socket | a GitHub App, so only the account owner can add it |
 | ☑ | Scanners wired into CI, build fails on anything untriaged | [static/](static/README.md) |
 
-**CodeQL stays unticked on purpose.** Both repositories have
+**CodeQL was read on 2026-07-31 and is now ticked.** `gh` and the CodeQL CLI are
+both absent from the build machine, so rather than wait for access to the
+Security tab, the 2.26.2 bundle was downloaded, checksum-verified and run
+locally with the same `security-extended` suite the workflows ask for. Four
+findings, one fixed, three rebutted: [codeql/](codeql/README.md). The hosted run
+will still differ, and the report says how.
+
+The paragraph below is kept because it is still true of the **workflow**, and it
+is what the hosted alerts will need. Both repositories have
 `.github/workflows/codeql.yml` as of 2026-07-29, pinned, scoped to
 `security-events: write` in its own file so `ci.yml` stays read-only, running on
 every push and weekly so new queries reach unchanged code. But it **reports, it
@@ -185,6 +193,7 @@ pool defence, each caught by the invariant that names it.
 | 🟢 | 2026-07-29 | Circuit adversarial harness — witnesses valid in every respect but one, aimed at each constraint in turn, plus the public-input binding against the pool | `transfer`, `shield`, `notes` | `26511b2` | Every constraint proven load-bearing: 17 deleted one at a time, 17 caught. No missing constraint found; circuits unchanged. 2 Informational | [circuits/](circuits/README.md) |
 | 🟢 | 2026-07-31 | Relayer watch — liveness, chain and pool binding, payout drift, float measured from chain, self-report cross-check | `relay.cowlprotocol.com` (mainnet + testnet), both payout wallets | live chain state | Both relayers correct and answering; mainnet float 0.0402 ETH, about 358 spends, inside the watch band. All 7 alarms proven to fire. 1 Informational fixed (`--update` had never worked) | [monitoring/](monitoring/README.md) |
 | 🟢 | 2026-07-31 | Supply chain — install scripts, advisories, and what the shipped bundle actually contains | `Cowl-Protocol/cli` 43 production packages, `Cowl-Protocol/app` 929 | `e6d254a`, app `31249e9` | No path to a user's keys. 37 advisories read and rebutted with bundle evidence; 1 install script reaches users and the CLI runs without it. 3 Informational/Low, all acknowledged or mitigated | [supplychain/](supplychain/README.md) |
+| 🟢 | 2026-07-31 | CodeQL `security-extended`, run locally at 2.26.2 after checksum verification | `Cowl-Protocol/cli` 43 files, `Cowl-Protocol/app` 76 files | working tree at `e6d254a` + uncommitted | 4 findings. 1 real and fixed (a check-then-use race in code from the same session, fix verified by re-running); 2 configurable-endpoint reports with no privilege boundary; 1 false positive on a dedicated worker | [codeql/](codeql/README.md) |
 
 ## Conventions
 
