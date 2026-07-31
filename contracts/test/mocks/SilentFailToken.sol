@@ -54,6 +54,59 @@ contract SilentFailApproveToken {
     }
 }
 
+/// A working ERC-20 whose `transfer` fails quietly, but only when one named
+/// caller makes it. The narrowness is the point: the adapter's surplus refund is
+/// the last thing a trade does, and reaching it means every earlier leg —
+/// including the pool's own payout, which is also a `transfer` — has to succeed
+/// first. A token that failed for everyone would revert in the pool and never
+/// let the adapter's branch run at all.
+contract SilentFailTransferForToken {
+    uint8 public constant decimals = 6;
+
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    /// The one caller whose `transfer` reports failure instead of moving value.
+    address public failFor;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+
+    function setFailFor(address who) external {
+        failFor = who;
+    }
+
+    function mint(address to, uint256 value) external {
+        totalSupply += value;
+        balanceOf[to] += value;
+        emit Transfer(address(0), to, value);
+    }
+
+    function approve(address spender, uint256 value) external returns (bool) {
+        allowance[msg.sender][spender] = value;
+        return true;
+    }
+
+    function transfer(address to, uint256 value) external returns (bool) {
+        if (msg.sender == failFor) return false;
+        return _move(msg.sender, to, value);
+    }
+
+    function transferFrom(address from, address to, uint256 value) external returns (bool) {
+        if (from != msg.sender && allowance[from][msg.sender] != type(uint256).max) {
+            allowance[from][msg.sender] -= value;
+        }
+        return _move(from, to, value);
+    }
+
+    function _move(address from, address to, uint256 value) internal returns (bool) {
+        balanceOf[from] -= value;
+        balanceOf[to] += value;
+        emit Transfer(from, to, value);
+        return true;
+    }
+}
+
 /// WETH-shaped: wrapping works, approving does not. Used to reach the adapter's
 /// input-leg approval, the first thing it does after unshielding.
 contract SilentFailApproveWETH {

@@ -31,7 +31,7 @@ not changed.
 | | Job | Covers | Result |
 |---|---|---|---|
 | 🟢 | cli · typecheck, build, unit tests | lockfile, types, bundle, denominations, relay table | green |
-| 🟢 | cli · forge test | 74 contract tests from a clean clone | green |
+| 🟢 | cli · forge test | 78 contract tests from a clean clone | green |
 | 🟢 | cli · invariant suite can fail | the pool mutation harness, 6/6 | green |
 | 🟢 | cli · nargo test | 32 circuit tests, the circuit mutation harness 17/17, public inputs vs the pool | green |
 | 🟢 | cli · static analysis | slither 0.11.5 and aderyn 0.6.8 against the recorded baseline, fails on anything untriaged | green |
@@ -99,7 +99,7 @@ are listed in [`../README.md`](../README.md).
 |---|---|---|
 | `scanners` | `audits/static/check.mjs` — slither + aderyn against the baseline | 23 fingerprints matched; proven to bite by planting an unused state variable |
 | `node` | `npm ci`, `typecheck`, `build`, `npm test`, `test:relay -- --static` | lockfile in sync via `npm ci --dry-run`; typecheck clean; `built dist/cli.mjs`; denominations all green; relay static half all green |
-| `contracts` | `forge test` | 74 passed, 0 failed |
+| `contracts` | `forge test` | 78 passed, 0 failed |
 | `mutants` | `audits/invariant/mutants.sh` | 6/6 mutants caught, source restored |
 | `supplychain` | `audits/supplychain/check.mjs` — install-script and advisory baseline | 2 install scripts accepted, 1 advisory triaged; proven to bite on all three drift classes |
 | `circuits` | `nargo test` in `notes`, `shield`, `transfer`; then `audits/circuits/mutants.mjs`; then `nargo compile` and `audits/circuits/publicinputs.mjs` | 3 + 6 + 23 = 32 tests passed; 17/17 circuit mutants caught; 14 and 6 public inputs matched |

@@ -30,7 +30,7 @@ Test baseline at the same commit, both green before and after this scan:
 | 🟢 | Path to deposited funds | — | **Neither tool found one.** Every finding read against source |
 | 🟢 | Regression gate | — | Runs on every push; fails on anything untriaged. Proven to bite — see below |
 | 🟡 | M-01 · verifier-swap escape hatch, owner is a single EOA | Medium | Mitigated — watched by [`../monitoring/`](../monitoring/README.md); scheduling and a multisig still open |
-| 🟡 | L-01 · adapter refund `transfer` return unchecked | Low | Fixed in `8b1c58f`, **not deployed** — redeploy deferred, and the branch still has no unit test |
+| 🟡 | L-01 · adapter refund `transfer` return unchecked | Low | Fixed in `8b1c58f`, **not deployed** — redeploy deferred; now pinned by failing-first tests on the ERC-20 branch |
 | 🟡 | L-02 · adapter `approve` returns unchecked, 3 sites | Low | Fixed in `8b1c58f`, **not deployed** — fails closed either way, pinned by failing-first tests |
 | 🟡 | I-01 · adapter is a one-way sink | Informational | Acknowledged — holds funds for one transaction by design |
 | 🟡 | I-02 · fee-on-transfer tokens desync their own `pooledValue` | Informational | Acknowledged — bounded per token by the turnstile |
@@ -137,7 +137,7 @@ do not carry into this table unverified.
 | ID | Finding | Severity | Status |
 |---|---|---|---|
 | [M-01] | Verifier-swap escape hatch had no watcher; owner is a single EOA | Medium | **Mitigated** — state watcher + recorded baseline ([`../monitoring/`](../monitoring/README.md)); scheduled runs and a multisig still open |
-| [L-01] | Adapter refund `transfer` return value unchecked | Low | **Fixed in `8b1c58f`** — redeploy deferred; ERC-20 branch untested pending a fixture |
+| [L-01] | Adapter refund `transfer` return value unchecked | Low | **Fixed in `8b1c58f`** — redeploy deferred; ERC-20 branch covered since 2026-08-01, both mutations caught |
 | [L-02] | Adapter `approve` return values unchecked, 3 sites | Low | **Fixed in `8b1c58f`** — redeploy deferred; pinned by failing-first tests |
 | [I-01] | Adapter is a one-way sink: open `receive()`, no sweep | Informational | **Acknowledged** — holds funds for one transaction by design |
 | [I-02] | A fee-on-transfer or rebasing token desyncs its own `pooledValue` | Informational | **Acknowledged** — per-token turnstile bounds the damage; a client-side warning is the fix |
@@ -199,14 +199,36 @@ whole trade with it. No value was at risk. Fixed anyway, with `ApprovalFailed()`
 for uniformity with the pool — which checks every one of its own.
 
 **Both fixes are pinned by tests that fail without them.** `test/mocks/SilentFailToken.sol`
-adds two tokens that report failure by returning `false` instead of reverting —
-the venue mocks all return `true`, which is exactly why 62 passing tests never
-touched these paths. The two new cases in `CowlTradeAdapter.t.sol` cover the
+adds tokens that report failure by returning `false` instead of reverting — the
+venue mocks all return `true`, which is exactly why 62 passing tests never
+touched these paths. The two cases in `CowlTradeAdapter.t.sol` cover the
 input-leg and shield-leg approvals, and both were confirmed to fail against the
-pre-fix source before being kept. The ERC-20 refund at `:199` is **not** covered:
-reaching it needs a trade whose *input* leg is an ERC-20, and every proof fixture
-today has a native input leg. That gap is real and should close when a fixture
-with an ERC-20 input exists.
+pre-fix source before being kept.
+
+**The ERC-20 refund at `:199` is now covered too**, by
+`test/CowlTradeAdapterErc20Leg.t.sol` (2026-08-01). This entry previously called
+it untestable until a proof fixture with an ERC-20 input leg existed. **That was
+wrong, and the reason is worth keeping.** The fixture requirement came from the
+end-to-end file's own shape, where the real verifier means `spend.token` can only
+be whatever a fixture already committed to. But the proof is not what this branch
+is about — the end-to-end file already proves the real verifier accepts these
+calls and rejects tampered ones. Building the pool on an accepting verifier, the
+way the invariant suite does, makes `spend.token` free while the turnstile, the
+nullifier set and the root ring all stay real and still have to hold. **A missing
+test was attributed to a missing fixture when it was really a missing test.**
+
+Four cases: the surplus refund itself, the exact-fill boundary either side of
+`left != 0`, `SameAsset` on a leg that can only be reached with an ERC-20 input,
+and the silent failure that L-01 exists for. Reaching that last one needs a token
+that fails for the adapter alone, since the pool's own payout on the same line is
+also a `transfer` and would otherwise revert first — `SilentFailTransferForToken`
+takes one address and fails only for it.
+
+**Both mutations were run.** Dropping the return check reverts the fix, and
+`test_a_silent_refund_failure_unwinds_the_whole_trade` fails with "next call did
+not revert as expected". Removing the refund entirely also fails
+`test_an_erc20_input_leg_refunds_its_surplus_to_the_submitter` on `0 != 100`.
+Source restored and `git diff` clean after each.
 
 ### [I-01] The adapter is a one-way sink — acknowledged, `CowlTradeAdapter.sol:112`
 
