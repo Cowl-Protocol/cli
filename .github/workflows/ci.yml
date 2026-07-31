@@ -103,6 +103,24 @@ jobs:
       # the recorded baseline.
       - run: node audits/static/check.mjs
 
+  supplychain:
+    name: dependency gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+      # No `npm ci`, deliberately. The install-script half reads package-lock.json
+      # and nothing else, and installing the tree in order to check whether the
+      # tree is safe to install would run the very scripts this is here to notice.
+      #
+      # This is the only gate in the file that looks at what arrives from
+      # outside. Everything above it reads code somebody here wrote.
+      - run: node audits/supplychain/check.mjs
+
   circuits:
     name: nargo test
     runs-on: ubuntu-latest

@@ -1,0 +1,25 @@
+{
+  "installScripts": [
+    {
+      "name": "esbuild",
+      "version": "0.23.1",
+      "dev": true,
+      "optional": false
+    },
+    {
+      "name": "msgpackr-extract",
+      "version": "3.0.4",
+      "dev": false,
+      "optional": true
+    }
+  ],
+  "advisories": [
+    {
+      "id": "S-01",
+      "package": "esbuild",
+      "url": "https://github.com/advisories/GHSA-67mh-4wv8-2f99",
+      "severity": "moderate",
+      "verdict": "Not reachable. The advisory is about esbuild's development server, which answers cross-origin requests. Nothing here starts one: esbuild is used as a library by build.mjs and scripts/watch-pool.mjs, both of which call build() and exit. It is also dev-only, so it is absent from the 43 packages a user installs. Full reasoning in README.md."
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+name: Scorecard
+
+# OpenSSF Scorecard. A third party grading this repository's supply-chain
+# posture from the outside, on criteria nobody here chose: are actions pinned,
+# are dependencies watched, is there a security policy, can a maintainer force
+# push over history, does anything run with more permission than it needs.
+#
+# It scores the repository, not the code — so it says nothing about the pool or
+# the circuits, and it is not a substitute for anything in audits/. What it
+# catches is the class the other tools structurally cannot see: the path into
+# this project that does not go through this project's code.
+#
+# Its own file rather than a job in ci.yml, for the same reason CodeQL has one:
+# it needs `security-events: write` to publish, and ci.yml stays `contents:
+# read`.
+#
+# **This reports, it does not gate.** A score is a ranking, not a verdict, and
+# several criteria are things only the account owner can change (branch
+# protection, signed releases). Turning the result into decisions is a human
+# reading it, the same way the static analysis report works.
+
+on:
+  branch_protection_rule:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly, off the hour, and on a different day from CodeQL so two
+    # publishing workflows never contend for the same code-scanning upload.
+    - cron: "41 5 * * 3"
+
+permissions:
+  contents: read
+
+jobs:
+  analysis:
+    name: scorecard
+    runs-on: ubuntu-latest
+    permissions:
+      # `security-events` to publish the SARIF, `id-token` for the signed
+      # attestation the OpenSSF API requires, `actions` to read workflow
+      # metadata. Nothing else.
+      security-events: write
+      id-token: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # Publishing puts the score on the public OpenSSF dashboard and is
+          # what lets the badge resolve. It also means the grade is visible
+          # whether or not it is flattering, which is the same rule audits/
+          # already runs on.
+          publish_results: true
+
+      # Kept because the SARIF in code scanning is retained for a while and this
+      # is not. When a score moves, the artifact is what says which criterion
+      # moved it.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scorecard-results
+          path: results.sarif
+          retention-days: 30
+
+      - uses: github/codeql-action/upload-sarif@4187e74d05793876e9989daffde9c3e66b4acd07 # v3
+        with:
+          sarif_file: results.sarif

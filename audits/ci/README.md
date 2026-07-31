@@ -93,7 +93,7 @@ only thing that catches a relayer daemon left running an older build, and
 `npm run watch` is the only thing that reads the money. Both stay manual. Both
 are listed in [`../README.md`](../README.md).
 
-## cli — five jobs
+## cli — six jobs
 
 | Job | Runs | Proven locally |
 |---|---|---|
@@ -101,12 +101,19 @@ are listed in [`../README.md`](../README.md).
 | `node` | `npm ci`, `typecheck`, `build`, `npm test`, `test:relay -- --static` | lockfile in sync via `npm ci --dry-run`; typecheck clean; `built dist/cli.mjs`; denominations all green; relay static half all green |
 | `contracts` | `forge test` | 74 passed, 0 failed |
 | `mutants` | `audits/invariant/mutants.sh` | 6/6 mutants caught, source restored |
+| `supplychain` | `audits/supplychain/check.mjs` — install-script and advisory baseline | 2 install scripts accepted, 1 advisory triaged; proven to bite on all three drift classes |
 | `circuits` | `nargo test` in `notes`, `shield`, `transfer`; then `audits/circuits/mutants.mjs`; then `nargo compile` and `audits/circuits/publicinputs.mjs` | 3 + 6 + 23 = 32 tests passed; 17/17 circuit mutants caught; 14 and 6 public inputs matched |
 
 `forge test` runs from a clean clone with no `forge install` and no circuit
 build, because forge-std is vendored and the proof fixtures are committed on
 purpose (the reasoning is written into `.gitignore`). The `bench-*` circuit
 packages are measurements rather than checks and are not run.
+
+The `supplychain` job deliberately does **not** run `npm ci`. Its offline half
+reads `package-lock.json` and nothing else, and installing the tree in order to
+check whether the tree is safe to install would run the very scripts it exists to
+notice. It is also the only job in the file that looks at what arrives from
+outside; every other one reads code somebody here wrote.
 
 **Both mutation harnesses run on every push**, and they are the pair that would
 be easiest to leave out and hardest to notice missing. Without them an invariant

@@ -1,0 +1,58 @@
+version: 2
+
+# Dependency updates, opened as pull requests for a human to read.
+#
+# Nothing here merges anything. That matters more in this repository than in
+# most: two of the pins below are load-bearing against bytecode that is already
+# deployed and cannot be changed, so an automatic bump would not be a
+# convenience, it would be an outage nobody proposed.
+
+updates:
+  # ---------------------------------------------------------------- actions ---
+  # Every action in this repository is pinned to a commit SHA rather than a tag,
+  # which is the right call and also the reason this entry exists: a pinned SHA
+  # never updates itself, so without something watching them the pins quietly
+  # rot. Dependabot rewrites the SHA and the trailing `# vN` comment together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:40"
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ""
+
+  # ------------------------------------------------------------------- npm ---
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:40"
+    open-pull-requests-limit: 5
+    # One PR for the routine noise, so the interesting ones are visible. Majors
+    # stay separate because they are the ones that need reading.
+    groups:
+      minor-and-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    commit-message:
+      prefix: ""
+    ignore:
+      # ---- DO NOT LET THESE MOVE ON THEIR OWN ----
+      #
+      # The pool at 0x6f98666e…6a3E is immutable and holds real money. Its two
+      # verifiers were generated from these exact toolchain versions, and a
+      # proof is only accepted if it is the bytes that verifier expects. A
+      # different Barretenberg produces a different proof encoding and a
+      # different verification key, so bumping either of these does not
+      # "update a dependency" — it stops every spend in both clients from
+      # verifying, against a contract that cannot be patched.
+      #
+      # Moving them is a deliberate project with a verifier swap behind it
+      # (7-day timelock, see audits/monitoring/), never a dependency PR.
+      - dependency-name: "@aztec/bb.js"
+      - dependency-name: "@noir-lang/noir_js"
