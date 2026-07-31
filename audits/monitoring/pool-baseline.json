@@ -11,7 +11,11 @@
       "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
       "0x0c1eD62D7811e5b437e537Ac9d0592469C119C74",
       "0x2CE3E396E069Ac9FA62046F423267072E06E77af"
-    ]
+    ],
+    "relayer": {
+      "url": "https://relay.cowlprotocol.com/mainnet",
+      "address": "0x2C9103706624D09e57BE849267F9229f2136C8aB"
+    }
   },
   "robinhood-testnet": {
     "pool": "0xf9F825f2D6d8509c78baaa587694f74672C32A59",
@@ -22,6 +26,10 @@
       "0x0000000000000000000000000000000000000000",
       "0xdC155cafBa4D26790781c12e4B1001F933496Da2",
       "0xa82762eDA1AF5Ed19B9BD544C121dbcF365526aC"
-    ]
+    ],
+    "relayer": {
+      "url": "https://relay.cowlprotocol.com",
+      "address": "0xEAd4E3Ee1715aF246BF39D958163Ba91892127A0"
+    }
   }
 }

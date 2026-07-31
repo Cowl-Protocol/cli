@@ -27,6 +27,7 @@
     "test:publicinputs": "node audits/circuits/publicinputs.mjs",
     "test:scanners": "node audits/static/check.mjs",
     "watch": "node scripts/watch-pool.mjs",
+    "test:watch-mutants": "node audits/monitoring/mutants.mjs",
     "prepublishOnly": "node ./build.mjs"
   },
   "keywords": [

@@ -13,8 +13,9 @@ shows clean results is not evidence of anything.
 | 🟢 | Pool accounting | Six invariants held across 245,760 randomised calls. Turnstile exact to the wei on every token that ever entered, on both live pools | [invariant/](invariant/README.md) · [monitoring/](monitoring/README.md) |
 | 🟢 | Circuit constraints | Every constraint proven load-bearing: 17 deleted one at a time, 17 caught. Public inputs match the pool on all 14 of `spend` and 6 of `shield` | [circuits/](circuits/README.md) |
 | 🟢 | Contracts, static | Neither scanner found a path to deposited funds. Every finding triaged against source, and a gate on every push now fails on anything untriaged | [static/](static/README.md) |
-| 🟢 | Test integrity | Both suites carry a mutation harness, so a test that stopped constraining anything would show up rather than stay green | [invariant/](invariant/README.md) · [circuits/](circuits/README.md) |
+| 🟢 | Test integrity | Three mutation harnesses, so a test or an alarm that stopped constraining anything would show up rather than stay green | [invariant/](invariant/README.md) · [circuits/](circuits/README.md) · [monitoring/](monitoring/README.md) |
 | 🟢 | Continuous integration | 5 jobs across both repos, green since the first run, every action SHA-pinned | [ci/](ci/README.md) |
+| 🟢 | Gasless relayer | Answers, serves the right chain and pool, payout address matches the baseline, and its own float figure agrees with the chain. All 7 alarms proven to fire | [monitoring/](monitoring/README.md) |
 | 🟡 | App and CLI code | CodeQL runs on every push and weekly in both repositories, on the wider `security-extended` suite. It reports rather than gates, and nothing has been triaged yet | [ci/](ci/README.md) |
 | 🟡 | Governance | Pool is not a proxy and cannot be edited. The one lever is a 7-day timelocked verifier swap, held by a single deployer EOA. Watched, not yet scheduled, not yet a multisig | [static/](static/README.md) · [monitoring/](monitoring/README.md) |
 | 🟡 | Trade adapter | L-01 and L-02 are fixed in source; the deployed adapter predates the fixes because a redeploy was deliberately deferred | [static/](static/README.md) |
@@ -118,14 +119,17 @@ releases happen, and it belongs to whoever holds the npm account.
 | | Step | Artifact |
 |---|---|---|
 | ☑ | State watcher, recorded baseline, response playbook | [monitoring/](monitoring/README.md) |
+| ☑ | Relayer float check | [monitoring/](monitoring/README.md) |
 | ☐ | Scheduled runs on the VPS | — |
-| ☐ | Relayer float check | — |
 | ☐ | Notification channel | — |
 | ☐ | Tenderly or Forta alert on turnstile divergence | — |
 
-`npm run watch` is written, proven to alarm on simulated drift, and run by hand.
-Nothing schedules it yet. The relayer float is the gap worth closing next: it
-empties silently, and gasless stops for everyone the moment it does.
+`npm run watch` is written, proven to alarm, and run by hand. It now covers the
+relayer as well as the pool, and **measures the float from the chain rather than
+from the daemon's own report** — a control that asks the thing it watches whether
+it is well is not a control. Nothing schedules it yet, and nothing tells a person
+when it speaks. That notification channel is the gap worth closing next: every
+check that matters now exists and is addressed to nobody.
 
 ### Phase 4 — human eyes
 
@@ -154,6 +158,7 @@ is most of the setup cost. It still belongs after the cheap work.
 | | Step | Artifact |
 |---|---|---|
 | ☑ | Mutation harness proving the invariant suite can fail | [invariant/](invariant/README.md) |
+| ☑ | Mutation harness proving the relayer alarms can fire | [monitoring/](monitoring/README.md) |
 
 Not in the plan, added because a green suite proves nothing on its own:
 an invariant no mutation can violate is testing nothing. Six mutations, one per
@@ -168,6 +173,7 @@ pool defence, each caught by the invariant that names it.
 | 🟢 | 2026-07-29 | Invariant suite — six pool properties under randomised call sequences, verifier stubbed to accept everything | `ShieldedPool.sol` | `5eb31a8` | All six held across 245,760 calls. Suite proven able to fail: 6/6 mutations caught. 2 Informational, both unreachable through a sound verifier | [invariant/](invariant/README.md) |
 | 🟢 | 2026-07-29 | Continuous integration — build, typecheck, contracts, circuits and the mutation harness on every push, both repos | `Cowl-Protocol/cli`, `Cowl-Protocol/app` | `cf9fdb6`, `b600bbc` | 5 jobs, all green on the first real run. Every action SHA-pinned, no gate touching live infrastructure. 1 Informational (the app's lint script has never worked) | [ci/](ci/README.md) |
 | 🟢 | 2026-07-29 | Circuit adversarial harness — witnesses valid in every respect but one, aimed at each constraint in turn, plus the public-input binding against the pool | `transfer`, `shield`, `notes` | `26511b2` | Every constraint proven load-bearing: 17 deleted one at a time, 17 caught. No missing constraint found; circuits unchanged. 2 Informational | [circuits/](circuits/README.md) |
+| 🟢 | 2026-07-31 | Relayer watch — liveness, chain and pool binding, payout drift, float measured from chain, self-report cross-check | `relay.cowlprotocol.com` (mainnet + testnet), both payout wallets | live chain state | Both relayers correct and answering; mainnet float 0.0402 ETH, about 358 spends, inside the watch band. All 7 alarms proven to fire. 1 Informational fixed (`--update` had never worked) | [monitoring/](monitoring/README.md) |
 
 ## Conventions
 
