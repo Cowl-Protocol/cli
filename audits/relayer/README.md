@@ -1,6 +1,6 @@
 # Relayer daemon — the part that answers the internet
 
-**Date** 2026-08-01 · **Tool** none exists; an adversarial harness against the
+**Date** 2026-08-01 · **Audited commit** `90836c5` · **Tool** none exists; an adversarial harness against the
 real daemon over a stub chain · **Scope** `src/relayer/server.ts`,
 `src/relayer/client.ts`, and the sweep in `src/relayer/rebalance.ts`
 
