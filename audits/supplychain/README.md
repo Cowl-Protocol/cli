@@ -244,11 +244,18 @@ a bump would reopen a conflict that was resolved by hand once.
 - **Socket is not installed.** It is a GitHub App, so only the account owner can
   add it, and its best signal (a package gaining an install script or new network
   access) is the half `check.mjs` now covers locally.
-- **The app has no gate of its own.** `check.mjs` lives here and reads this
-  repository's lockfile. The app is covered by Dependabot, by this report, and by
-  CodeQL, but nothing fails its build when a new install script appears. Giving
-  it the same gate means either duplicating the script or extracting it, and
-  duplication across two repositories is the smaller cost only until it drifts.
+- ~~**The app has no gate of its own.**~~ **Closed 2026-08-01.** The app now runs
+  this same gate on every push, with its own baseline over its own lockfile: 8
+  install scripts and 27 advisories, each carrying a written verdict, in
+  [`Cowl-Protocol/app` → `audits/supplychain/`](https://github.com/Cowl-Protocol/app/blob/main/audits/supplychain/README.md).
+
+  Duplication won over extraction, and the drift that made it the worse option is
+  now checked rather than trusted. **The two copies are byte-identical**, each
+  baseline records the sha256 of the file beside it, and each copy checks its
+  own — so editing either one turns that repository red until somebody
+  re-records it, which is exactly the moment to copy the change across. Comparing
+  `twinSha` across the two baselines answers "are these in sync" without reading
+  either file. The guard was proven to fire before it was recorded.
 - **The advisories are rebutted, not closed.** Bumping Next.js would close most
   of the 36 outright. That is a real change with a real regression surface, so it
   is a deliberate piece of work rather than something to fold into this step.

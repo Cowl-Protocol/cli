@@ -38,7 +38,22 @@
 // baseline would turn a triage step into a keystroke, and the baseline would
 // stop meaning "read and rebutted". Advisories are added by hand, with a
 // verdict, or the gate stays red.
+//
+// ## Why this file exists twice
+//
+// The same gate runs in `Cowl-Protocol/cli` and `Cowl-Protocol/app`, because the
+// app's build machine turns 900-odd packages into the bundle every browser runs,
+// and that bundle is where a wallet signature becomes a spending key. Two
+// repositories, two lockfiles, so two gates.
+//
+// Duplication is the cheaper of the two options only until the copies drift, so
+// they do not get to drift quietly: **the two files are byte-identical**, each
+// baseline records the sha256 of the file beside it, and each copy checks its
+// own. Edit one and that repository goes red until somebody re-records it, which
+// is the moment to copy the change across. Compare the `twinSha` in the two
+// baselines and you know whether they are in sync without reading either file.
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -98,15 +113,37 @@ for (const [path, entry] of Object.entries(lock.packages ?? {})) {
 }
 scripts.sort((a, b) => a.name.localeCompare(b.name));
 
+// ------------------------------------------------------------ the twin ---
+// Hashed from disk rather than from anything this process holds, so the check
+// is about the file that will be copied, not about what happens to be running.
+const SELF = fileURLToPath(import.meta.url);
+const selfSha = createHash("sha256").update(readFileSync(SELF)).digest("hex");
+
 if (UPDATE) {
-  const merged = { ...baseline, installScripts: scripts };
+  const merged = { ...baseline, twinSha: selfSha, installScripts: scripts };
   writeFileSync(BASELINE, `${JSON.stringify(merged, null, 2)}\n`);
   say(`Recorded ${scripts.length} package${scripts.length === 1 ? "" : "s"} with install scripts.`);
+  say(`Recorded twinSha ${selfSha.slice(0, 12)}… — copy this file to the other repository and`);
+  say("re-record there too, or the two gates are running different code.");
   say("Commit it, and write down in README.md why each one is acceptable.");
   process.exit(0);
 }
 
 let failures = 0;
+
+say();
+say("Twin");
+if (!baseline.twinSha) {
+  failures += 1;
+  bad("no twinSha in the baseline — record one with --update");
+} else if (baseline.twinSha !== selfSha) {
+  failures += 1;
+  bad(`this gate has been edited since it was recorded (${selfSha.slice(0, 12)}… vs ${baseline.twinSha.slice(0, 12)}…)`);
+  note("copy it to the other repository, then re-record both with --update");
+} else {
+  ok(`gate matches its recorded copy (${selfSha.slice(0, 12)}…)`);
+}
+
 say();
 say("Install scripts");
 const accepted = new Map((baseline.installScripts ?? []).map((s) => [s.name, s]));

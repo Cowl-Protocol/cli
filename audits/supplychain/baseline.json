@@ -21,5 +21,6 @@
       "severity": "moderate",
       "verdict": "Not reachable. The advisory is about esbuild's development server, which answers cross-origin requests. Nothing here starts one: esbuild is used as a library by build.mjs and scripts/watch-pool.mjs, both of which call build() and exit. It is also dev-only, so it is absent from the 43 packages a user installs. Full reasoning in README.md."
     }
-  ]
+  ],
+  "twinSha": "2526a83db8eee2f2ae7cd0874e5cfcb2de24503e4b15363acf9633574afde9b7"
 }
