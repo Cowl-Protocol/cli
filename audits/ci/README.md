@@ -35,6 +35,7 @@ not changed.
 | 🟢 | cli · invariant suite can fail | the pool mutation harness, 6/6 | green |
 | 🟢 | cli · nargo test | 32 circuit tests, the circuit mutation harness 17/17, public inputs vs the pool | green |
 | 🟢 | cli · static analysis | slither 0.11.5 and aderyn 0.6.8 against the recorded baseline, fails on anything untriaged | green |
+| 🟢 | cli · relayer daemon under attack | the real daemon over a stub chain: 8 cases, then 8/8 mutants. No network, no key | added 2026-08-01, lands with the push that carries it |
 | 🟢 | app · typecheck, offline checks, build | types, four offline verify scripts, production build | green |
 | 🟢 | Supply chain | every action pinned to a full commit SHA, `contents: read`, no secrets | green |
 | 🟡 | I-01 · the app's `lint` script has never worked | eslint 9 installed, no config file of any kind | open, deliberately not a gate |
@@ -93,7 +94,7 @@ only thing that catches a relayer daemon left running an older build, and
 `npm run watch` is the only thing that reads the money. Both stay manual. Both
 are listed in [`../README.md`](../README.md).
 
-## cli — six jobs
+## cli — seven jobs
 
 | Job | Runs | Proven locally |
 |---|---|---|
@@ -102,6 +103,7 @@ are listed in [`../README.md`](../README.md).
 | `contracts` | `forge test` | 78 passed, 0 failed |
 | `mutants` | `audits/invariant/mutants.sh` | 6/6 mutants caught, source restored |
 | `supplychain` | `audits/supplychain/check.mjs` — install-script and advisory baseline | 2 install scripts accepted, 1 advisory triaged; proven to bite on all three drift classes |
+| `relayer` | `audits/relayer/attack.mjs`, then `audits/relayer/mutants.mjs` | 8/8 cases held in 8s; 8/8 mutants caught, sources restored byte for byte |
 | `circuits` | `nargo test` in `notes`, `shield`, `transfer`; then `audits/circuits/mutants.mjs`; then `nargo compile` and `audits/circuits/publicinputs.mjs` | 3 + 6 + 23 = 32 tests passed; 17/17 circuit mutants caught; 14 and 6 public inputs matched |
 
 `forge test` runs from a clean clone with no `forge install` and no circuit

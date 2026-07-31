@@ -61,8 +61,17 @@ const hex = (v: unknown, what: string): `0x${string}` => {
   if (typeof v !== "string" || !/^0x[0-9a-fA-F]+$/.test(v)) throw new Error(`Bad ${what} in relay payload.`);
   return v as `0x${string}`;
 };
+/**
+ * Nothing on this wire is wider than a uint256, whose decimal form is 78
+ * digits. The bound is not cosmetic: `BigInt` on a long decimal is superlinear
+ * work on the relayer's single thread, and the body limit alone would let an
+ * anonymous caller ask for two million digits of it per request.
+ */
+const MAX_DIGITS = 78;
 const big = (v: unknown, what: string): bigint => {
-  if (typeof v !== "string" || !/^[0-9]+$/.test(v)) throw new Error(`Bad ${what} in relay payload.`);
+  if (typeof v !== "string" || !/^[0-9]+$/.test(v) || v.length > MAX_DIGITS) {
+    throw new Error(`Bad ${what} in relay payload.`);
+  }
   return BigInt(v);
 };
 

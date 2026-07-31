@@ -83,6 +83,40 @@ const SWEEP_AT_FRACTION = 2n; // half of the float first seen
  * pool root, so a long queue only grows stale — better to say busy early. */
 const MAX_QUEUE = 8;
 
+/**
+ * Requests being priced at once, before any of them reaches the queue.
+ *
+ * `MAX_QUEUE` bounds the transactions this relayer will have in flight; it
+ * bounds nothing upstream. Pricing a quote costs a gas price, up to four quoter
+ * calls and a balance read — six RPC requests that an anonymous caller triggers
+ * for free, and that the queue never sees because a quote never enters it. On a
+ * chain whose endpoints rate-limit, that is how one machine takes the gasless
+ * path down for everyone without spending anything.
+ *
+ * Sixteen is far above what the app and CLI generate together and far below
+ * what an endpoint will tolerate, so honest traffic never meets it.
+ */
+const MAX_INFLIGHT = 16;
+
+/**
+ * How far the venue's own fee tiers may disagree about a token before this
+ * relayer stops believing any of them.
+ *
+ * A pair's tiers are held together by arbitrage: a real spread of more than a
+ * few percent does not survive a block, let alone a factor of four. Anyone can
+ * create a pool at a tier that has none and seed it with a dust position at a
+ * price of their choosing, and `feeInToken` takes the cheapest quote it is
+ * offered — so without this, one dust pool costing about a dollar sets the fee
+ * for every spend in that token, and the relayer carries the gas.
+ *
+ * Refusing is the safe direction and a handled one: both clients already fall
+ * back to self-paid for a token the relayer will not price, and say so. The
+ * residual is named in `audits/relayer/README.md` — with no honest pool
+ * answering there is nothing to disagree with, and the close for that is an
+ * operator allowlist rather than a constant.
+ */
+const MAX_TIER_SPREAD = 4n;
+
 /** A rejection the spender fixes by re-quoting and reproving (409), as opposed
  * to a malformed payload (400). */
 class Reprove extends Error {}
@@ -118,9 +152,16 @@ const FEE_TIERS = [100, 500, 3000, 10000] as const;
  * of the token buys exactly that much WETH. The fee leg of an ERC-20 spend
  * pays in that token, so this is what makes relaying one worth the gas.
  *
- * The configured tier is tried first and the rest follow, cheapest onward. The
- * cheapest quote wins: it is the pool that would really be routed through, and
- * quoting a worse one would overcharge for gas that costs the same either way.
+ * The configured tier is tried first and the rest follow, cheapest onward, and
+ * the cheapest quote wins so a spender is not charged for a thin pool nobody
+ * would trade through.
+ *
+ * That used to be the whole rule, and taking the lowest number anyone can
+ * produce is a rule about who gets to produce it. Creating a pool at an empty
+ * tier is permissionless, so the cheapest quote could be a dust position priced
+ * by whoever wanted a free ride. `MAX_TIER_SPREAD` is what stands between those
+ * two readings: the tiers still compete, but only while they agree that they
+ * are pricing the same thing.
  */
 async function feeInToken(net: NetworkDef, token: Address, feeWei: bigint): Promise<bigint> {
   const quoter = net.contracts.quoter;
@@ -154,10 +195,49 @@ async function feeInToken(net: NetworkDef, token: Address, feeWei: bigint): Prom
       "No pool on this venue prices that token against WETH, so its fee cannot be charged — withdraw the native coin, or submit it yourself.",
     );
   }
-  return priced.reduce((best, q) => (q < best ? q : best));
+
+  const cheapest = priced.reduce((best, q) => (q < best ? q : best));
+  const dearest = priced.reduce((worst, q) => (q > worst ? q : worst));
+  // Two tiers that disagree by more than MAX_TIER_SPREAD are not two prices for
+  // the same thing, and taking the lower of them is how the cheap one wins.
+  if (cheapest * MAX_TIER_SPREAD < dearest) {
+    throw new Error(
+      "This venue's fee tiers disagree about that token by too much to price a fee against — withdraw the native coin, or submit it yourself.",
+    );
+  }
+  return cheapest;
+}
+
+/**
+ * What an anonymous caller is told when something below fails.
+ *
+ * A rejection has to carry the chain's own reason or the spender cannot tell a
+ * stale root from a spent nullifier. What it must not carry is the operator's
+ * infrastructure: viem writes the endpoint URL and the outgoing request body
+ * into the message of any transport failure, and this relayer answers the open
+ * internet. Today's networks resolve to keyless public endpoints, so nothing
+ * secret leaks; a relayer pointed at its own keyed endpoint — which
+ * `deploy/relayer` tells operators to do — would publish the key on the first
+ * RPC hiccup.
+ */
+function publicError(message: string): string {
+  return (
+    message
+      .split("\n")
+      .filter((line) => !/^\s*(URL|Request body|Version)\s*:/i.test(line))
+      .join("\n")
+      .trim() || "The relayer could not carry that."
+  );
 }
 
 function send(res: ServerResponse, status: number, body: unknown): void {
+  // A relayed spend answers from inside its queue job and then keeps working —
+  // remembering the fee token, sweeping. Anything that throws after that point
+  // reaches the handler's catch, which would answer a request that has already
+  // been answered, and writing headers twice is a thrown exception with no
+  // catch above it. One request would take the whole daemon down, and every
+  // spend queued behind it with it.
+  if (res.headersSent) return;
   const text = JSON.stringify(body);
   res.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(text) });
   res.end(text);
@@ -213,15 +293,20 @@ export function startRelayServer(
    * Runs after a relay rather than before one, so a withdrawal never waits on a
    * swap. Failures are swallowed: a sweep that cannot run leaves the relayer
    * exactly as it was, and the next quote will still say the float is thin.
+   *
+   * "Swallowed" has to mean all of them. The balance read below used to sit
+   * outside the try, so an endpoint that blinked between carrying a spend and
+   * deciding whether to sweep rejected this promise — and this runs after the
+   * spend has already been answered, where there is no caller left to tell.
    */
   async function maybeSweep(): Promise<void> {
     if (sweeping || feeTokens.size === 0) return;
-    const float = await publicClient(net).getBalance({ address: account.address });
-    if (floatHighWater === 0n) floatHighWater = float;
-    if (float > floatHighWater / SWEEP_AT_FRACTION) return;
-
     sweeping = true;
     try {
+      const float = await publicClient(net).getBalance({ address: account.address });
+      if (floatHighWater === 0n) floatHighWater = float;
+      if (float > floatHighWater / SWEEP_AT_FRACTION) return;
+
       console.log(`  float at ${float} wei, past half of ${floatHighWater} — selling fees back into gas`);
       const report = await sweepToGas(net, account, [...feeTokens]);
       for (const s of report.sold) {
@@ -242,19 +327,31 @@ export function startRelayServer(
     }
   }
 
+  // Requests currently doing upstream work. Distinct from `queued`, which
+  // counts transactions: everything expensive about a request happens before it
+  // ever reaches the queue, so the queue cannot bound it.
+  let inflight = 0;
+
   const server = createServer((req, res) => {
     void (async () => {
+      if (inflight >= MAX_INFLIGHT) {
+        onEvent({ kind: "rejected", reason: "too many requests in flight" });
+        send(res, 429, { error: "Relayer is busy — retry shortly." });
+        return;
+      }
+      inflight += 1;
       try {
         const url = new URL(req.url ?? "/", "http://relay");
         if (req.method === "GET" && url.pathname === "/quote") {
           // ?op=trade sizes the quote for an atomic trade's gas instead of a spend's.
           const gasUnits = url.searchParams.get("op") === "trade" ? gasPerTrade(net) : GAS_PER_SPEND;
-          const feeWei = await feeNow(net, opts.marginPct, gasUnits);
           // ?token=0x… prices the fee in that ERC-20 via the venue quoter; the
-          // fee leg of a spend pays in the spend's own token.
+          // fee leg of a spend pays in the spend's own token. Validated before
+          // anything upstream is asked, so a malformed address costs nothing.
           const tokenParam = url.searchParams.get("token");
           const token = tokenParam && tokenParam !== "0" ? (tokenParam as Address) : null;
           if (token && !/^0x[0-9a-fA-F]{40}$/.test(token)) throw new Error("Bad token address.");
+          const feeWei = await feeNow(net, opts.marginPct, gasUnits);
           const fee = token ? await feeInToken(net, token, feeWei) : feeWei;
 
           // A relayer that cannot pay for the spend it is quoting would take the
@@ -311,6 +408,15 @@ export function startRelayServer(
           // fees are priced through the venue quoter.
           if (spend.relayer !== BigInt(account.address)) throw new Error("Spend does not pay this relayer.");
           if (spend.token > (1n << 160n) - 1n) throw new Error("Bad token in spend.");
+          // Before pricing, not after. Pricing an ERC-20 fee is five upstream
+          // calls, and a relayer with a full queue is going to refuse this
+          // request either way — so a flood of spends it cannot carry should
+          // cost it nothing to turn away.
+          if (queued >= MAX_QUEUE) {
+            onEvent({ kind: "rejected", reason: "queue full" });
+            send(res, 429, { error: "Relayer is busy — retry shortly." });
+            return;
+          }
           const floorWei = await feeNow(net, 0);
           const floor =
             spend.token === 0n
@@ -318,11 +424,6 @@ export function startRelayServer(
               : await feeInToken(net, `0x${spend.token.toString(16).padStart(40, "0")}` as Address, floorWei);
           if (spend.fee < floor) {
             throw new Reprove(`Fee too low: the spend pays ${spend.fee}, gas costs ${floor}. Re-quote and reprove.`);
-          }
-          if (queued >= MAX_QUEUE) {
-            onEvent({ kind: "rejected", reason: "queue full" });
-            send(res, 429, { error: "Relayer is busy — retry shortly." });
-            return;
           }
 
           queued += 1;
@@ -361,12 +462,17 @@ export function startRelayServer(
             if (spend.token !== 0n) {
               feeTokens.add(`0x${spend.token.toString(16).padStart(40, "0")}` as Address);
             }
-            void maybeSweep();
             send(res, 200, {
               hash: receipt.hash,
               gasUsed: receipt.gasUsed.toString(),
               blockNumber: receipt.blockNumber.toString(),
             });
+            // Answered first, so no withdrawal waits on a swap — but awaited
+            // inside the job, so the sweep still holds the queue. A detached
+            // sweep sends its approve from the same account as the next spend
+            // in line, and viem reads the nonce per transaction: two sends that
+            // overlap read the same one, and one of them is thrown away.
+            await maybeSweep();
           });
           chain = job.catch(() => {});
           await job;
@@ -385,6 +491,12 @@ export function startRelayServer(
           if (t.spend.recipient !== BigInt(adapter)) throw new Error("Trade spend does not pay the adapter.");
           if (t.spend.relayer !== BigInt(account.address)) throw new Error("Spend does not pay this relayer.");
           if (t.spend.token > (1n << 160n) - 1n) throw new Error("Bad token in spend.");
+          // Before pricing, for the reason given on the same check in /relay.
+          if (queued >= MAX_QUEUE) {
+            onEvent({ kind: "rejected", reason: "queue full" });
+            send(res, 429, { error: "Relayer is busy — retry shortly." });
+            return;
+          }
           const tradeFloorWei = await feeNow(net, 0, gasPerTrade(net));
           const tradeFloor =
             t.spend.token === 0n
@@ -392,11 +504,6 @@ export function startRelayServer(
               : await feeInToken(net, `0x${t.spend.token.toString(16).padStart(40, "0")}` as Address, tradeFloorWei);
           if (t.spend.fee < tradeFloor) {
             throw new Reprove(`Fee too low: the trade pays ${t.spend.fee}, gas costs ${tradeFloor}. Re-quote and reprove.`);
-          }
-          if (queued >= MAX_QUEUE) {
-            onEvent({ kind: "rejected", reason: "queue full" });
-            send(res, 429, { error: "Relayer is busy — retry shortly." });
-            return;
           }
 
           queued += 1;
@@ -429,7 +536,11 @@ export function startRelayServer(
         const reason = (e as Error).message;
         onEvent({ kind: "rejected", reason });
         // 409 says "reprove against fresh state"; 400 says "malformed payload".
-        send(res, e instanceof Reprove ? 409 : 400, { error: reason });
+        // The operator's log keeps the whole message; the caller gets the half
+        // that is about their spend rather than about this relayer's plumbing.
+        send(res, e instanceof Reprove ? 409 : 400, { error: publicError(reason) });
+      } finally {
+        inflight -= 1;
       }
     })();
   });

@@ -14,13 +14,15 @@ shows clean results is not evidence of anything.
 | 🟢 | Circuit constraints | Every constraint proven load-bearing: 17 deleted one at a time, 17 caught. Public inputs match the pool on all 14 of `spend` and 6 of `shield` | [circuits/](circuits/README.md) |
 | 🟢 | Contracts, static | Neither scanner found a path to deposited funds. Every finding triaged against source, and a gate on every push now fails on anything untriaged | [static/](static/README.md) |
 | 🟢 | Test integrity | Three mutation harnesses, so a test or an alarm that stopped constraining anything would show up rather than stay green | [invariant/](invariant/README.md) · [circuits/](circuits/README.md) · [monitoring/](monitoring/README.md) |
-| 🟢 | Continuous integration | 6 jobs in the cli plus the app's, green since the first run, every action SHA-pinned | [ci/](ci/README.md) |
+| 🟢 | Continuous integration | 7 jobs in the cli plus the app's, green since the first run, every action SHA-pinned | [ci/](ci/README.md) |
 | 🟢 | Supply chain | Nothing in either tree reaches a user's keys: every advisory read and rebutted with bundle evidence. One install script in what a user installs, and the CLI is proven to work without it. **Both repositories** gated on every push against their own baseline, by the same gate, kept from drifting apart by a recorded hash | [supplychain/](supplychain/README.md) |
-| 🟢 | Gasless relayer | Answers, serves the right chain and pool, payout address matches the baseline, and its own float figure agrees with the chain. All 7 alarms proven to fire | [monitoring/](monitoring/README.md) |
+| 🟢 | Gasless relayer, from outside | Answers, serves the right chain and pool, payout address matches the baseline, and its own float figure agrees with the chain. All 7 alarms proven to fire | [monitoring/](monitoring/README.md) |
+| 🟢 | Relayer daemon, from inside | The only component holding a funded key and answering the open internet, and the last one with no test. Six findings, all fixed; nothing reaches deposited value. 8 defences deleted one at a time, 8 caught | [relayer/](relayer/README.md) |
 | 🟢 | App and CLI code | CodeQL `security-extended` read on both repositories: 4 findings, 1 fixed, 3 rebutted with reasoning. Nothing in proving, note handling, key derivation or the wire format | [codeql/](codeql/README.md) |
 | 🟡 | Governance | Pool is not a proxy and cannot be edited. The one lever is a 7-day timelocked verifier swap, held by a single deployer EOA. Watched, not yet scheduled, not yet a multisig | [static/](static/README.md) · [monitoring/](monitoring/README.md) |
 | 🟡 | Trade adapter | L-01 and L-02 are fixed in source and now both pinned by tests that fail without them, including the ERC-20 input leg that had none; the deployed adapter still predates the fixes because a redeploy was deliberately deferred | [static/](static/README.md) |
 | 🟡 | Circuit residuals | Two properties the circuits do not carry alone. Both are held by the pool or need a token that does not exist. Closing either costs a timelocked verifier swap | [circuits/](circuits/README.md) |
+| 🟡 | Relayer fee pricing | The fee a relayer demands in an ERC-20 comes from a venue quote, and a bound on how far the tiers may disagree is not a proof that any of them is honest. An attacker can now deny a token, never underpay for one | [relayer/](relayer/README.md) |
 
 **No 🔴 anywhere today.**
 
@@ -177,10 +179,19 @@ is most of the setup cost. It still belongs after the cheap work.
 | ☑ | Mutation harness proving the invariant suite can fail | [invariant/](invariant/README.md) |
 | ☑ | Mutation harness proving the relayer alarms can fire | [monitoring/](monitoring/README.md) |
 | ☑ | Dependency gate: fails on a new install script or an untriaged advisory | [supplychain/](supplychain/README.md) |
+| ☑ | Adversarial harness against the relayer daemon itself | [relayer/](relayer/README.md) |
 
 Not in the plan, added because a green suite proves nothing on its own:
 an invariant no mutation can violate is testing nothing. Six mutations, one per
 pool defence, each caught by the invariant that names it.
+
+**The relayer daemon is beyond the plan too, and it is the gap that reading the
+plan found.** The plan ranks the relayer fourth by what it costs when it breaks
+and scopes it as "availability and overcharge, not theft", which is right. What
+nothing in this tree had done is read the process itself: it holds a funded key,
+listens on a public port, and signs on the strength of a payload written by an
+anonymous caller, and it was the only component in the protocol with no test and
+no report. [relayer/](relayer/README.md).
 
 ## Reports
 
@@ -195,6 +206,7 @@ pool defence, each caught by the invariant that names it.
 | 🟢 | 2026-07-31 | Supply chain — install scripts, advisories, and what the shipped bundle actually contains | `Cowl-Protocol/cli` 43 production packages, `Cowl-Protocol/app` 929 | `e6d254a`, app `31249e9` | No path to a user's keys. 37 advisories read and rebutted with bundle evidence; 1 install script reaches users and the CLI runs without it. 3 Informational/Low, all acknowledged or mitigated | [supplychain/](supplychain/README.md) |
 | 🟢 | 2026-08-01 | Dependency gate for the app — its own baseline over its own lockfile, and a drift guard between the two copies | `Cowl-Protocol/app` 929 packages | app `0c2c364` | 8 install scripts and 27 advisories, each with a written verdict; none reachable, with bundle evidence over 225 chunks and controls proving the sweep. Gate proven to fail on all three drift classes | [supplychain/](supplychain/README.md) |
 | 🟢 | 2026-08-01 | Adapter ERC-20 input leg — the two `trade()` branches no proof fixture reaches, and the surplus refund L-01 exists for | `CowlTradeAdapter.sol` | `ce11804` | 4 tests added, 78 total. Both mutations caught: dropping the return check and removing the refund each fail a test that names them. The recorded gap was a missing test, not a missing fixture, and the report says so | [static/](static/README.md) |
+| 🟡 | 2026-08-01 | Relayer daemon — adversarial cases against the real process over a stub chain, plus the mutants that prove each case bites | `src/relayer/{server,client,rebalance}.ts` | `a8a08b4` | 6 findings, all fixed: 1 Medium (one dust pool set the fee for a whole token), 2 Low (an endpoint hiccup killed the daemon; 6 uncapped RPC calls per anonymous request), 3 Informational. 8/8 mutants caught. One residual named | [relayer/](relayer/README.md) |
 | 🟢 | 2026-07-31 | CodeQL `security-extended`, run locally at 2.26.2 after checksum verification | `Cowl-Protocol/cli` 43 files, `Cowl-Protocol/app` 76 files | working tree at `e6d254a` + uncommitted | 4 findings. 1 real and fixed (a check-then-use race in code from the same session, fix verified by re-running); 2 configurable-endpoint reports with no privilege boundary; 1 false positive on a dedicated worker | [codeql/](codeql/README.md) |
 
 ## Conventions
@@ -238,6 +250,8 @@ npm run test:mutants                   # proves the invariant suite can fail
 npm run test:circuits                  # notes, shield and transfer
 npm run test:circuit-mutants           # proves the circuit tests can fail
 npm run test:publicinputs              # circuit public inputs vs the pool's
+npm run test:relayer                   # the daemon under attack, over a stub chain
+npm run test:relayer-mutants           # proves each relayer case can fail
 npm run test:scanners                  # fails on any static finding nobody triaged
 npm run test:relay -- --static         # the half of the relay check CI runs
 ./audits/static/scan.sh                # regenerates both scanner reports

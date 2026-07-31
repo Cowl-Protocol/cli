@@ -25,6 +25,8 @@
     "test:circuits": "for p in notes shield transfer; do (cd circuits/$p && nargo test) || exit 1; done",
     "test:circuit-mutants": "node audits/circuits/mutants.mjs",
     "test:publicinputs": "node audits/circuits/publicinputs.mjs",
+    "test:relayer": "node audits/relayer/attack.mjs",
+    "test:relayer-mutants": "node audits/relayer/mutants.mjs",
     "test:scanners": "node audits/static/check.mjs",
     "test:supplychain": "node audits/supplychain/check.mjs",
     "watch": "node scripts/watch-pool.mjs",
