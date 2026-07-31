@@ -80,9 +80,18 @@ that works today. It does not — COWL, AAPL and DIH each price at exactly one
 tier, so there is nothing to disagree with, and USDG's three real tiers agree to
 within 0.35%.
 
-**`npm` still serves 0.6.12, so `@latest` is currently a downgrade** that would
-silently undo all six fixes. Flagged in [`../../deploy/relayer/README.md`](../../deploy/relayer/README.md)
-until 0.6.13 is published.
+**The registry does not carry these fixes yet, and the version number hides
+it.** `0.6.13` was published from a build made before this audit: the box and
+the registry both report `0.6.13`, and their `dist/cli.mjs` differ. Checked
+rather than assumed — the published bundle is missing `too many requests in
+flight` and the two other markers, against controls (`Relayer is busy`, `zcowl`,
+`quoteExactOutputSingle`) that hit in both. **`0.6.14` is the first published
+build that carries them.** Flagged in [`../../deploy/relayer/README.md`](../../deploy/relayer/README.md)
+until it is up.
+
+The lesson is the one this tree keeps relearning: a version is a label somebody
+types, not evidence. What settled it was a string that only exists after the fix,
+beside controls proving the search works.
 
 ## The method
 
