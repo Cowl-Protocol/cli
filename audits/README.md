@@ -106,7 +106,7 @@ the middle step was the right instinct. A workflow that has never run produces n
 score, and a score nobody has read is not an artifact — the same rule that keeps
 CodeQL honest. What settled it was running Scorecard 5.5.0 locally against both
 repositories and writing the per-check verdicts down, which is the artifact.
-cli **8.9**, app **7.6**. The hosted run will differ because it also scores the
+cli **8.9**, app **8.0**. The hosted run will differ because it also scores the
 GitHub account and its history, and that is said plainly in the report.
 
 **The gate is stricter than the plan asked for.** The plan says the build should

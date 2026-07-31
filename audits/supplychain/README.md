@@ -20,7 +20,7 @@ Covers both repositories. `Cowl-Protocol/cli` is what users install;
 | 🟢 | Install scripts in what a user installs | exactly one, optional, and the CLI is proven to work without it |
 | 🟢 | Gate on anything new entering | [`check.mjs`](check.mjs), proven to fail on all three drift classes |
 | 🟢 | Dependency updates watched | Dependabot on npm and actions, both repos, with the two proof-critical pins refused |
-| 🟢 | Third party posture grade | OpenSSF Scorecard 5.5.0 run locally: cli **8.9**, app **7.6**, every check given a verdict below |
+| 🟢 | Third party posture grade | OpenSSF Scorecard 5.5.0 run locally: cli **8.9**, app **8.0**, every check given a verdict below |
 | 🟡 | The app carries 929 packages against the cli's 70 | build-time only, and the reason the build machine is now the highest-value target in the project |
 | 🟡 | Socket not installed | it is a GitHub App, so only the account owner can add it. `check.mjs` covers the install-script half it is best at |
 | 🟡 | 36 app advisories are unreachable, not absent | rebutted with evidence, not fixed. Bumping Next.js closes most of them and is a real change to make deliberately |
@@ -129,7 +129,7 @@ Scorecard 5.5.0, downloaded and checksum-verified against the published
 | Repository | Score | Was |
 |---|---|---|
 | `cli` | **8.9 / 10** | 8.1 before `SECURITY.md` |
-| `app` | **7.6 / 10** | 6.8 before `SECURITY.md` |
+| `app` | **8.0 / 10** | 6.8 before `SECURITY.md`, 7.6 before `LICENSE` |
 
 ### The first result was wrong, and the reason matters
 
@@ -158,7 +158,7 @@ than the subject.
 | SAST | 10 | 10 | CodeQL is detected in both |
 | Dependency-Update-Tool | 10 | 10 | Dependabot, added this session |
 | Security-Policy | 10 | 10 | `SECURITY.md`, added this session. Was 0 on both |
-| License | 9 | 0 | cli is MIT and detected. **The app repository has no LICENSE file**, which is a decision rather than an oversight to fix here |
+| License | 9 | 9 | Both MIT, both detected. 9 rather than 10 in both repositories, which is the ceiling Scorecard gives this file's shape |
 | Vulnerabilities | 9 | 0 | The advisories triaged above. The score is a count, not a reachability judgement |
 | Fuzzing | 0 | 0 | **A false negative.** Scorecard detects OSS-Fuzz and ClusterFuzzLite integrations, and this project fuzzes through neither. It ran 245,760 randomised calls against the pool and an adversarial witness harness against the circuits, both in CI, both with mutation harnesses. Not worth chasing a score that measures which vendor rather than whether |
 | Packaging | -1 | -1 | Inconclusive in local mode, which cannot see release history |
@@ -181,7 +181,7 @@ read the project around it.
 | S-03 | Low | **Mitigated** | 36 advisories in the app tree, none reachable in the shipped bundle, all rebutted with the evidence above. Mitigated rather than fixed: the packages are still there, and a future build could pull a version where the reasoning no longer holds. `check.mjs` is what catches that |
 
 | S-04 | Informational | **Acknowledged** | `pip install slither-analyzer==0.11.5` in `ci.yml:92` is version-pinned but not hash-pinned, the cli's only Pinned-Dependencies deduction. Hash-pinning it means a full `--require-hashes` requirements file covering slither's whole transitive tree, resolved for the Linux runner from a macOS machine, which is a real chance of breaking a working gate to move a score by two points. The job runs on an ephemeral runner under `contents: read` with no secrets and nothing to steal, so a compromised wheel would execute in a sandbox and end there. Left as is, deliberately |
-| S-05 | Informational | **Open — the account owner's call** | The `app` repository has no `LICENSE` file, scoring 0. The cli is MIT. Which licence the app carries is a decision, not a fix, so it is recorded rather than made |
+| S-05 | Informational | **Fixed** | The `app` repository had no `LICENSE`, scoring 0. Now MIT, matching the cli, with the same copyright holder and a `license` field in `package.json` to go with it. License 0 to 9, aggregate 7.6 to 8.0 |
 
 Impact is measured against deposited value first. None of these touch it, which
 is why none is above Low.
