@@ -148,19 +148,23 @@ never points users at a dead URL.
   It earns fees back on every relay.
 - **Margin**: change the take by editing `--margin` in the unit, then
   `sudo systemctl daemon-reload && sudo systemctl restart cowl-relayer`.
-- **⚠️ `@latest` is a DOWNGRADE, and the version number will not tell you.**
-  Both units were deployed on 2026-08-01 from a local `npm pack` tarball
-  carrying the six relayer fixes in `audits/relayer/README.md`. The **0.6.13 on
-  npm was published from a build made before those fixes**, so `cowl --version`
-  reports `0.6.13` on the box and npm reports `0.6.13` as latest while the two
-  are **different code** — verified: the box's `dist/cli.mjs` carries
-  `too many requests in flight` and the registry's does not.
+- **A version is a label, not evidence — check the build, not the number.**
+  `0.6.13` was published from a build made before the relayer audit, so for a
+  while the box and the registry both reported `0.6.13` and were different code.
+  Nothing about a version check could see it. `0.6.14` is the first published
+  build carrying the six fixes in `audits/relayer/README.md`, and it was checked
+  rather than assumed: the published bundle and the running one are byte
+  identical once the version literal is normalised. Worth repeating after any
+  release that matters —
 
-  So `npm install -g @cowlprotocol/cli@latest` still puts the box back on the
-  pre-audit daemon, including the fee floor anyone could set, and nothing about
-  the version says so. **0.6.14 is the first published build that carries the
-  fixes.** Until it is up, do not run the upgrade line below; after it is, this
-  note comes out.
+  ```bash
+  curl -sL https://registry.npmjs.org/@cowlprotocol/cli/-/cli-<version>.tgz | tar xz
+  grep -c "too many requests in flight" package/dist/cli.mjs   # 1, not 0
+  grep -c "Relayer is busy" package/dist/cli.mjs               # control: must also be 1
+  ```
+
+  The control line is the point. A grep that returns zero proves nothing until
+  the grep itself is proven.
 - **Upgrade**: `sudo npm install -g @cowlprotocol/cli@latest`, then restart every
   relayer unit on the box. Do this whenever a release moves the gas figures,
   because the price a spend is quoted comes from the daemon's own copy of them —

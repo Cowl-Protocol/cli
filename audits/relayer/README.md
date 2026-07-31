@@ -80,18 +80,22 @@ that works today. It does not — COWL, AAPL and DIH each price at exactly one
 tier, so there is nothing to disagree with, and USDG's three real tiers agree to
 within 0.35%.
 
-**The registry does not carry these fixes yet, and the version number hides
-it.** `0.6.13` was published from a build made before this audit: the box and
-the registry both report `0.6.13`, and their `dist/cli.mjs` differ. Checked
-rather than assumed — the published bundle is missing `too many requests in
-flight` and the two other markers, against controls (`Relayer is busy`, `zcowl`,
-`quoteExactOutputSingle`) that hit in both. **`0.6.14` is the first published
-build that carries them.** Flagged in [`../../deploy/relayer/README.md`](../../deploy/relayer/README.md)
-until it is up.
+**On the registry as `0.6.14`, and that took two attempts.** `0.6.13` went up
+from a build made before this audit, so for a while the box and the registry
+both reported `0.6.13` and carried different code — the deceptive shape of "the
+box is not running what we think it is", because no version check can see it.
+Caught by grepping the published tarball for a string that only exists after the
+fix, against controls (`Relayer is busy`, `zcowl`, `quoteExactOutputSingle`) that
+hit in both bundles.
+
+`0.6.14` was verified the same way and further: the published `dist/cli.mjs` and
+the one the relayers are running are **919,980 bytes each and hash identically**
+once the version literal is normalised. Registry, box and audited source are one
+artifact.
 
 The lesson is the one this tree keeps relearning: a version is a label somebody
-types, not evidence. What settled it was a string that only exists after the fix,
-beside controls proving the search works.
+types. What settled it was a string that only exists after the fix, beside
+controls proving the search works.
 
 ## The method
 
