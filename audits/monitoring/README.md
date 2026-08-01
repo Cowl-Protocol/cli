@@ -19,22 +19,31 @@ piece of infrastructure the whole gasless path depends on.
 | 🟢 | Relayer payout address unchanged | matches the recorded baseline, both networks |
 | 🟢 | Relayer's own float figure agrees with the chain | agrees, both networks |
 | 🟢 | Every alarm actually fires | governance and turnstile against simulated drift; all 7 relayer alarms against [`mutants.mjs`](mutants.mjs) |
-| 🟡 | Mainnet relayer float | 0.0402 ETH, about **358 spends**. Above the alert floor, inside the watch band |
-| 🟡 | Nothing schedules the watcher | run by hand; a VPS timer needs a deploy |
-| 🟡 | No notification channel | an alarm nobody is told about is a log entry |
+| 🟢 | Every alarm reaches a person | 15 cases against a stub sink, 12 defences deleted one at a time, 12 caught |
+| 🟡 | Mainnet relayer float | 0.0388 ETH, about **337 spends** on 2026-08-01. Above the alert floor, inside the watch band |
+| 🟡 | Nothing schedules the watcher | units written and proven locally; installing them is a deploy |
 
 **The pool has no pause.** If this alarms, the levers are: stop the relayers,
 banner the app, tell people to withdraw self-paid. That is the whole playbook and
 it is written out below.
 
-The last two 🟡 rows are the same gap seen from two sides — every check is built
-and proven, and nothing runs them on a clock or tells anyone when they speak.
+**The channel half of that gap is closed.** `scripts/notify.mjs` takes the
+watcher's exit code and tells somebody, and
+[`notify-mutants.mjs`](notify-mutants.mjs) proves it — including that it stays
+quiet when there is nothing to say, which is the property that decides whether
+anyone still reads the channel in a month. The clock half is written as systemd
+units in [`../../deploy/watch/`](../../deploy/watch/README.md) and **not
+installed**: putting them on the VPS is a deploy.
 
 ```
 npm run watch                                  # every network with a pool
 npm run watch -- --network robinhood-mainnet
 npm run watch -- --update                      # re-record the baseline from chain
 npm run test:watch-mutants                     # prove the relayer alarms still fire
+
+npm run watch:notify                           # the same check, then tell somebody
+npm run watch:notify -- --dry-run --heartbeat  # print what would be sent, send nothing
+npm run test:notify                            # the channel's cases, then its mutants
 ```
 
 **`--update` on its own had never worked.** `argv.indexOf("--network")` returns
@@ -127,6 +136,149 @@ harness that leaves the network definition pointed at loopback is worse than one
 that never ran. That is not hypothetical: the first version used `spawnSync`,
 whose blocked event loop starved the stub server living in the same process, and
 the timeout that followed left the file mutated.
+
+## The notification channel
+
+Every alarm above was proven able to fire, and every one of them fired into a
+shell. This is the part that makes one arrive at a person.
+
+[`../../scripts/notify.mjs`](../../scripts/notify.mjs) runs the watcher as a
+child, reads its exit code, and posts to a webhook. It is a **wrapper rather
+than a flag**, and deliberately: `watch-pool.mjs` holds seven alarms that
+[`mutants.mjs`](mutants.mjs) pins, and adding outbound HTTP to the one component
+whose job is to be trustworthy would widen its surface and put every future
+delivery change in a file whose alarms are already nailed down. The seam is
+`--script`, an argument rather than a shell string, so the child is spawned with
+an argv array and a path can never become a command.
+
+### A fourth exit code
+
+The watcher's three codes pass through — 0 clean, 1 something to look at, 2
+could not check — and **3 means nobody was told**.
+
+That code is the reason this file exists. A check whose result never reached a
+person has the same operational value as a check that never ran, and from a
+timer's perspective the two are indistinguishable unless something says so. A
+delivery failure outranks the watcher's own verdict: exit 1 asserts that a human
+has been told there is something to look at, and if the POST failed that is
+precisely what did not happen.
+
+### What it refuses
+
+| Refusal | Why |
+|---|---|
+| plaintext sinks | the URL *is* the credential — Discord, Slack and Telegram all put the secret in the path. `https` required, loopback the only exception so the harness can stub a sink |
+| redirects | a 3xx is a request to hand the same secret to a different host |
+| group-readable secret files | `COWL_WATCH_WEBHOOK_FILE` must be `0600` or tighter, the same line `/etc/cowl-relayer/relayer.env` is held to on the same box |
+| logging the URL | the sink is named by host and kind in every line it prints. A systemd journal is readable by more people than `/etc` is |
+
+**What does leave the machine** is the watcher's output: pool address, token
+balances, the relayer's payout address and float. All of it is already public on
+chain and none of it is a key — but it is still a third party receiving it,
+which is why the deploy notes call for a private channel rather than one anybody
+can join.
+
+### The two ways silence lies
+
+A pending verifier swap alarms for seven days. At fifteen-minute ticks that is
+672 identical messages, and the 673rd is the one nobody reads. So a repeat of the
+same **digest** — the set of alarm labels, not the whole output, because balances
+and leaf counts move between runs and would make every repeat look new — is
+suppressed for `COWL_WATCH_REPEAT_MINUTES`. A digest that *changes* is always
+sent: a second alarm arriving beside the first is new information.
+
+The mirror of that is subtler. Going quiet after an alert is indistinguishable
+from the alert clearing, so a clean run following an alerting one sends
+`RECOVERED` whether or not anyone asked for heartbeats.
+
+And the one this cannot solve alone: **it cannot notice its own absence.** A
+timer that stops firing sends nothing, and nothing is what a healthy quiet run
+looks like too. `--heartbeat` on a daily unit is the cheap half — a message whose
+absence is the signal — and it only works if somebody notices it missing. The
+complete answer is an external dead-man's switch, which needs an account, and it
+is the same open row as Tenderly below.
+
+### Proven able to speak, and to stay quiet
+
+[`notify-mutants.mjs`](notify-mutants.mjs) stands a stub sink up on loopback and
+hands the notifier fake watchers with scripted exit codes. The real watcher is
+never run: what is under test is delivery, suppression and refusal, and pinning
+those to live chain state would make the harness fail for reasons that have
+nothing to do with the code it covers. **15 cases, 2026-08-01:**
+
+| Case | What it holds |
+|---|---|
+| `alert-sent` | the alarm's own words survive the trip — a message saying "check the logs" is a log entry |
+| `clean-silent` | a clean run says nothing at all |
+| `heartbeat` | …unless asked |
+| `unchecked-sent` | "could not check" is not "nothing wrong", and not silence either |
+| `repeat-suppressed` | the same alarms inside the cooldown go out once |
+| `digest-change` | a *different* alarm goes out immediately, cooldown or not |
+| `recovery` | clearing is said out loud |
+| `retry-then-fail` | a 502 does not eat an alert: 3 attempts, then exit 3 |
+| `plaintext-refused` | nothing leaves over `http` |
+| `redirect-refused` | the secret is not handed to a second host |
+| `watcher-timeout` | a hung watcher is killed and the timeout is itself notified |
+| `truncated` | an over-long body is cut to the sink's limit rather than rejected by it |
+| `concurrent-run-skipped` | two runs sharing a state file is how a cooldown swallows an unseen alert |
+| `stale-lock-taken` | …and a lock nothing can clear is a watcher that quietly stopped |
+| `webhook-file-perms` | a group-readable secret is refused |
+
+Then **12 defences deleted one at a time, 12 caught.** Each mutant re-runs the
+one case that defence exists for, and a case that still passes without it was
+never testing anything:
+
+| Mutant | Case that breaks |
+|---|---|
+| `no-https-guard` | `plaintext-refused` |
+| `no-perms-check` | `webhook-file-perms` |
+| `no-cooldown` | `repeat-suppressed` |
+| `digest-blind` | `digest-change` |
+| `no-recovery` | `recovery` |
+| `no-retry` | `retry-then-fail` |
+| `no-kill` | `watcher-timeout` |
+| `no-truncation` | `truncated` |
+| `follows-redirects` | `redirect-refused` |
+| `no-lock` | `concurrent-run-skipped` |
+| `lock-never-stale` | `stale-lock-taken` |
+| `silent-failure` | `retry-then-fail` |
+
+`no-kill` is the one worth reading twice. It survived the first version of its
+case, because a deadline that sets a flag without killing the child still
+produces the right message and the right exit code — **eventually**, and
+"eventually" is the entire bug: the unit stays active, the next tick stacks
+behind it, and the alert arrives whenever the hung process feels like returning.
+The case now measures elapsed time against a watcher that sleeps for twelve
+seconds behind a one-second deadline, and only a run that actually killed it
+comes back inside five.
+
+The mutant is a **sibling copy** of `notify.mjs` rather than an edit of it. The
+other two harnesses in this tree mutate their target in place and each carries a
+paragraph about what happens when the restore does not run; a copy has no
+restore to get wrong, and the original is never opened for writing.
+
+The whole harness reaches no network and reads no chain, so it runs in CI beside
+the relayer's, in about 35 seconds.
+
+### Scheduling
+
+Written and **not deployed**:
+[`../../deploy/watch/`](../../deploy/watch/README.md) — two systemd timers, the
+15-minute check and a daily heartbeat, with the reasoning for both cadences and
+what the box needs. Installing them is a deploy and belongs to whoever holds the
+VPS.
+
+Two details in there are load-bearing rather than decorative. `Persistent=true`,
+so a window missed to a reboot runs on the next boot instead of waiting out the
+interval. And no `Restart=`, because the next tick is fifteen minutes away and a
+retry storm against a rate-limited RPC is how a watcher becomes the outage it was
+installed to catch.
+
+The watcher gained one line for this: its esbuild scratch directory is now
+`COWL_WATCH_TMP` if set. That lets the unit run under `ProtectSystem=strict`
+with the checkout read-only to the process executing it, which it otherwise
+could not, because the scratch directory was the one thing inside the repository
+that needed to be writable.
 
 ## Findings
 
@@ -240,12 +392,16 @@ response as an undeliberate pending swap, minus the option to cancel.
 
 ## Not yet done
 
-- **Nothing runs this on a schedule.** It is a one-shot check built to be
-  cron- or timer-friendly, and it has only ever run by hand. Putting it on the
-  VPS beside the relayers is the obvious next step and needs a deploy.
-- **No notification channel.** Exit code 1 tells a shell, not a person. This is
-  now the largest remaining gap in this tree: every check that matters is built
-  and every alarm is proven to fire, and all of it is still addressed to nobody.
+- **Nothing runs this on a schedule yet.** The units exist and are proven
+  locally; installing them on the VPS beside the relayers is a deploy, and this
+  row closes when a timer is actually firing.
+- **Nothing notices the watch itself dying.** The daily heartbeat is a message
+  whose absence is the signal, and an absence is only a signal to somebody
+  looking for it. An external dead-man's switch is the real answer and needs an
+  account, same as the Tenderly row below.
+- **No second sink.** One webhook is one point of failure: a Discord outage and
+  a healthy quiet run look identical from here. Exit 3 catches the delivery
+  failing at this end, which is the half that is checkable from here.
 - **The float alarm cannot refill anything.** `rebalance.ts` sweeps ERC-20 fees
   back to gas, but the float only truly refills from outside. A watcher that
   says "top it up" still needs a human holding ether.

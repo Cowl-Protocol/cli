@@ -3,6 +3,10 @@ dist
 *.log
 .DS_Store
 .env
+# The notifier's dedupe memory and its run lock. Machine-local by definition:
+# what one box has already told a person is not a fact about the repository.
+.watch-state.json
+.watch-state.json.lock
 # Build output, except the proof fixtures the Solidity tests verify against.
 # Without them `forge test` cannot run from a clean clone, and that suite is the
 # only place the whole chain — note math, circuit, proof, verifier, pool — is

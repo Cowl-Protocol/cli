@@ -30,7 +30,9 @@
     "test:scanners": "node audits/static/check.mjs",
     "test:supplychain": "node audits/supplychain/check.mjs",
     "watch": "node scripts/watch-pool.mjs",
+    "watch:notify": "node scripts/notify.mjs",
     "test:watch-mutants": "node audits/monitoring/mutants.mjs",
+    "test:notify": "node audits/monitoring/notify-mutants.mjs",
     "prepublishOnly": "node ./build.mjs"
   },
   "keywords": [

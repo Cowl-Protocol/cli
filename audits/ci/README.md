@@ -35,7 +35,7 @@ not changed.
 | 🟢 | cli · invariant suite can fail | the pool mutation harness, 6/6 | green |
 | 🟢 | cli · nargo test | 32 circuit tests, the circuit mutation harness 17/17, public inputs vs the pool | green |
 | 🟢 | cli · static analysis | slither 0.11.5 and aderyn 0.6.8 against the recorded baseline, fails on anything untriaged | green |
-| 🟢 | cli · relayer daemon under attack | the real daemon over a stub chain: 8 cases, then 8/8 mutants. No network, no key | added 2026-08-01, lands with the push that carries it |
+| 🟢 | cli · relayer daemon under attack | the real daemon over a stub chain: 8 cases, then 8/8 mutants, plus the notification channel: 15 cases, then 12/12 mutants. No network, no key, loopback only | added 2026-08-01, lands with the push that carries it |
 | 🟢 | app · typecheck, offline checks, build | types, four offline verify scripts, production build | green |
 | 🟢 | Supply chain | every action pinned to a full commit SHA, `contents: read`, no secrets | green |
 | 🟡 | I-01 · the app's `lint` script has never worked | eslint 9 installed, no config file of any kind | open, deliberately not a gate |

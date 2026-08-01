@@ -1,0 +1,53 @@
+[Unit]
+Description=Cowl pool, governance and relayer watch
+Documentation=https://github.com/Cowl-Protocol/cli/blob/main/audits/monitoring/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=cowl-watch
+Group=cowl-watch
+
+# A checkout rather than the published package: the watcher reads src/networks.ts
+# and the relayer's own client through esbuild, so it needs the repository. The
+# CLI's npm tarball ships dist/ only, by design.
+WorkingDirectory=/opt/cowl-watch/cli
+
+# COWL_WATCH_WEBHOOK lives here, root-owned and chmod 600, the same way the
+# relayer's passphrase does on this box. The URL is the credential.
+EnvironmentFile=/etc/cowl-watch/watch.env
+
+# Outside the working directory on purpose: a `git pull` must never reset what
+# the box has already told a person.
+Environment=COWL_WATCH_STATE=/var/lib/cowl-watch/state.json
+
+# esbuild bundles src/networks.ts and the relayer client to run the check, and
+# it needs somewhere to put the result. Pointed off the checkout so the code
+# this unit runs stays read-only to it.
+Environment=COWL_WATCH_TMP=/var/lib/cowl-watch/build
+
+ExecStart=/usr/bin/node scripts/notify.mjs
+
+# The notifier has its own deadline and kills the watcher itself; this is the
+# outer bound in case the notifier is what hangs. Wider than the inner one so
+# the inner one is what normally fires — it is the path that notifies.
+TimeoutStartSec=600
+
+# Deliberately no Restart=. A failed tick is not retried, because the next tick
+# is four minutes away and a retry storm against a rate-limited RPC is how a
+# watcher becomes the outage. Exit 3 — nobody was told — shows up in the
+# journal and in `systemctl list-units --failed`.
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+# AF_UNIX is not optional: the notifier spawns the watcher and reads it over a
+# socketpair, so dropping it breaks the run rather than hardening it.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/cowl-watch
+
+[Install]
+WantedBy=multi-user.target

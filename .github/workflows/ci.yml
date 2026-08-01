@@ -60,6 +60,10 @@ jobs:
       # the mutants that prove each case constrains the defence it names.
       - run: npm run test:relayer
       - run: npm run test:relayer-mutants
+      # The notification channel, on the same terms: a stub sink on loopback and
+      # fake watchers, so it reaches no network and reads no chain. The mutant
+      # half proves each case still constrains the defence it names.
+      - run: npm run test:notify
 
   contracts:
     name: forge test

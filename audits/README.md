@@ -16,6 +16,7 @@ shows clean results is not evidence of anything.
 | 🟢 | Test integrity | Three mutation harnesses, so a test or an alarm that stopped constraining anything would show up rather than stay green | [invariant/](invariant/README.md) · [circuits/](circuits/README.md) · [monitoring/](monitoring/README.md) |
 | 🟢 | Continuous integration | 7 jobs in the cli plus the app's, green since the first run, every action SHA-pinned | [ci/](ci/README.md) |
 | 🟢 | Supply chain | Nothing in either tree reaches a user's keys: every advisory read and rebutted with bundle evidence. One install script in what a user installs, and the CLI is proven to work without it. **Both repositories** gated on every push against their own baseline, by the same gate, kept from drifting apart by a recorded hash | [supplychain/](supplychain/README.md) |
+| 🟢 | Alarms reach a person | The watch now tells somebody: 15 delivery, suppression and refusal cases against a stub sink, 12 defences deleted one at a time, 12 caught. Nothing schedules it yet | [monitoring/](monitoring/README.md) |
 | 🟢 | Gasless relayer, from outside | Answers, serves the right chain and pool, payout address matches the baseline, and its own float figure agrees with the chain. All 7 alarms proven to fire | [monitoring/](monitoring/README.md) |
 | 🟢 | Relayer daemon, from inside | The only component holding a funded key and answering the open internet, and the last one with no test. Six findings, all fixed and **live on both relayers since 2026-08-01**; nothing reaches deposited value. 8 defences deleted one at a time, 8 caught | [relayer/](relayer/README.md) |
 | 🟢 | App and CLI code | CodeQL `security-extended` read on both repositories: 4 findings, 1 fixed, 3 rebutted with reasoning. Nothing in proving, note handling, key derivation or the wire format | [codeql/](codeql/README.md) |
@@ -139,16 +140,32 @@ releases happen, and it belongs to whoever holds the npm account.
 |---|---|---|
 | ☑ | State watcher, recorded baseline, response playbook | [monitoring/](monitoring/README.md) |
 | ☑ | Relayer float check | [monitoring/](monitoring/README.md) |
-| ☐ | Scheduled runs on the VPS | — |
-| ☐ | Notification channel | — |
+| ☑ | Notification channel | [monitoring/](monitoring/README.md) |
+| ☐ | Scheduled runs on the VPS | units written, [deploy/watch/](../deploy/watch/README.md); installing them is a deploy |
 | ☐ | Tenderly or Forta alert on turnstile divergence | — |
 
-`npm run watch` is written, proven to alarm, and run by hand. It now covers the
+`npm run watch` is written, proven to alarm, and run by hand. It covers the
 relayer as well as the pool, and **measures the float from the chain rather than
 from the daemon's own report** — a control that asks the thing it watches whether
-it is well is not a control. Nothing schedules it yet, and nothing tells a person
-when it speaks. That notification channel is the gap worth closing next: every
-check that matters now exists and is addressed to nobody.
+it is well is not a control.
+
+**The channel this section called the next gap is closed.** `npm run watch:notify`
+runs the same check and tells a person, with a fourth exit code — **3, nobody was
+told** — because a result that reached no one is worth what a check that never ran
+is worth. What it refuses is as much of the design as what it sends: no plaintext
+sink, no redirects, no group-readable secret, and the URL never in a log line,
+since a Discord or Telegram webhook is secret in its *path*. It stays quiet on a
+clean run and suppresses a repeat of the same alarms, which is what decides
+whether anyone still reads the channel in a month, and it says `RECOVERED` out
+loud because going quiet after an alert is indistinguishable from the alert
+clearing.
+
+The clock is written and **not installed**: two systemd timers in
+[`../deploy/watch/`](../deploy/watch/README.md), the 15-minute check and a daily
+heartbeat. Putting them on the VPS is a deploy. The residual is named where it
+belongs — a timer that stops firing sends nothing, and nothing is what a healthy
+quiet run looks like too; the heartbeat is the cheap half of that answer and an
+external dead-man's switch is the rest.
 
 ### Phase 4 — human eyes
 
@@ -180,6 +197,7 @@ is most of the setup cost. It still belongs after the cheap work.
 | ☑ | Mutation harness proving the relayer alarms can fire | [monitoring/](monitoring/README.md) |
 | ☑ | Dependency gate: fails on a new install script or an untriaged advisory | [supplychain/](supplychain/README.md) |
 | ☑ | Adversarial harness against the relayer daemon itself | [relayer/](relayer/README.md) |
+| ☑ | Mutation harness proving the notification channel can fail | [monitoring/](monitoring/README.md) |
 
 Not in the plan, added because a green suite proves nothing on its own:
 an invariant no mutation can violate is testing nothing. Six mutations, one per
@@ -207,6 +225,7 @@ no report. [relayer/](relayer/README.md).
 | 🟢 | 2026-08-01 | Dependency gate for the app — its own baseline over its own lockfile, and a drift guard between the two copies | `Cowl-Protocol/app` 929 packages | app `0c2c364` | 8 install scripts and 27 advisories, each with a written verdict; none reachable, with bundle evidence over 225 chunks and controls proving the sweep. Gate proven to fail on all three drift classes | [supplychain/](supplychain/README.md) |
 | 🟢 | 2026-08-01 | Adapter ERC-20 input leg — the two `trade()` branches no proof fixture reaches, and the surplus refund L-01 exists for | `CowlTradeAdapter.sol` | `ce11804` | 4 tests added, 78 total. Both mutations caught: dropping the return check and removing the refund each fail a test that names them. The recorded gap was a missing test, not a missing fixture, and the report says so | [static/](static/README.md) |
 | 🟡 | 2026-08-01 | Relayer daemon — adversarial cases against the real process over a stub chain, plus the mutants that prove each case bites | `src/relayer/{server,client,rebalance}.ts` | `90836c5` | 6 findings, all fixed: 1 Medium (one dust pool set the fee for a whole token), 2 Low (an endpoint hiccup killed the daemon; 6 uncapped RPC calls per anonymous request), 3 Informational. 8/8 mutants caught. One residual named. Deployed to both relayers the same day, proven running rather than merely installed | [relayer/](relayer/README.md) |
+| 🟢 | 2026-08-01 | Notification channel — delivery, suppression and refusal against a stub sink, plus the mutants that prove each case bites | `scripts/notify.mjs`, `deploy/watch/` | working tree at `45399ff` | 15 cases pass, 12/12 mutants caught. A fourth exit code for "nobody was told"; plaintext sinks, redirects and group-readable secrets all refused. Scheduling units written and deliberately not deployed | [monitoring/](monitoring/README.md) |
 | 🟢 | 2026-07-31 | CodeQL `security-extended`, run locally at 2.26.2 after checksum verification | `Cowl-Protocol/cli` 43 files, `Cowl-Protocol/app` 76 files | working tree at `e6d254a` + uncommitted | 4 findings. 1 real and fixed (a check-then-use race in code from the same session, fix verified by re-running); 2 configurable-endpoint reports with no privilege boundary; 1 false positive on a dedicated worker | [codeql/](codeql/README.md) |
 
 ## Conventions
@@ -252,6 +271,7 @@ npm run test:circuit-mutants           # proves the circuit tests can fail
 npm run test:publicinputs              # circuit public inputs vs the pool's
 npm run test:relayer                   # the daemon under attack, over a stub chain
 npm run test:relayer-mutants           # proves each relayer case can fail
+npm run test:notify                    # the notification channel, and its mutants
 npm run test:scanners                  # fails on any static finding nobody triaged
 npm run test:relay -- --static         # the half of the relay check CI runs
 ./audits/static/scan.sh                # regenerates both scanner reports
@@ -263,5 +283,6 @@ they only ever run when someone runs them:
 
 ```
 npm run watch                          # governance + turnstile vs baseline
+npm run watch:notify                   # the same, and tell somebody about it
 npm run test:relay                     # adds the live half: are the daemons current
 ```

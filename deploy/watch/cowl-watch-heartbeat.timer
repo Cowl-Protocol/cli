@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily heartbeat from the Cowl watch
+Documentation=https://github.com/Cowl-Protocol/cli/blob/main/audits/monitoring/README.md
+
+[Timer]
+# 09:00 local, because the heartbeat's only job is to be missed by a person.
+# One that lands overnight is one nobody notices the absence of.
+OnCalendar=*-*-* 09:00:00
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

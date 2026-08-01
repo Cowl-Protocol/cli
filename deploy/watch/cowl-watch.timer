@@ -1,0 +1,25 @@
+[Unit]
+Description=Run the Cowl watch every 15 minutes
+Documentation=https://github.com/Cowl-Protocol/cli/blob/main/audits/monitoring/README.md
+
+[Timer]
+# Fifteen minutes is set by what the alert buys you, not by what the RPC can
+# stand. The pool's one drain vector is a verifier swap behind a 7-day delay, so
+# a quarter of an hour is nothing against the window that matters. The float
+# alarm fires at 100 spends, which is about half an hour of headroom at the
+# busiest rate this pool has ever run — that is the number this cadence is
+# actually chosen against.
+OnBootSec=5min
+OnUnitActiveSec=15min
+
+# Every box that starts a timer at :00 hits the same RPC at :00. The watcher
+# treats an unreachable RPC as "could not check", which notifies, so a
+# thundering herd would page a person about congestion it caused itself.
+RandomizedDelaySec=90
+
+# A missed window — reboot, maintenance — runs on the next boot rather than
+# waiting a quarter of an hour to find out what happened while the box was down.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

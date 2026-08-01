@@ -75,7 +75,11 @@ import { createPublicClient, http, fallback, getAddress } from "viem";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(HERE, "..");
-const TMP = join(CLI, ".watch-tmp");
+// Overridable so a deployment can keep its checkout read-only: the unit in
+// deploy/watch points this at its state directory and runs under
+// ProtectSystem=strict, where /opt is not writable and this would otherwise be
+// the one thing that needed it to be.
+const TMP = process.env.COWL_WATCH_TMP ?? join(CLI, ".watch-tmp");
 const BASELINE = join(CLI, "audits/monitoring/pool-baseline.json");
 
 const argv = process.argv.slice(2);
