@@ -20,6 +20,7 @@ shows clean results is not evidence of anything.
 | 🟢 | Gasless relayer, from outside | Answers, serves the right chain and pool, payout address matches the baseline, and its own float figure agrees with the chain. All 7 alarms proven to fire | [monitoring/](monitoring/README.md) |
 | 🟢 | Relayer daemon, from inside | The only component holding a funded key and answering the open internet, and the last one with no test. Six findings, all fixed and **live on both relayers since 2026-08-01**; nothing reaches deposited value. 8 defences deleted one at a time, 8 caught | [relayer/](relayer/README.md) |
 | 🟢 | App and CLI code | CodeQL `security-extended` read on both repositories: 4 findings, 1 fixed, 3 rebutted with reasoning. Nothing in proving, note handling, key derivation or the wire format | [codeql/](codeql/README.md) |
+| 🟡 | Paid disclosure | Scope, severity mapping, known issues and platform are written and ready to launch; no vault is funded and the three numbers are undecided | [bounty/](bounty/README.md) |
 | 🟡 | Governance | Pool is not a proxy and cannot be edited. The one lever is a 7-day timelocked verifier swap, held by a single deployer EOA. Watched, not yet scheduled, not yet a multisig | [static/](static/README.md) · [monitoring/](monitoring/README.md) |
 | 🟡 | Trade adapter | L-01 and L-02 are fixed in source and now both pinned by tests that fail without them, including the ERC-20 input leg that had none; the deployed adapter still predates the fixes because a redeploy was deliberately deferred | [static/](static/README.md) |
 | 🟡 | Circuit residuals | Two properties the circuits do not carry alone. Both are held by the pool or need a token that does not exist. Closing either costs a timelocked verifier swap | [circuits/](circuits/README.md) |
@@ -171,7 +172,8 @@ external dead-man's switch is the rest.
 
 | | Step | Artifact |
 |---|---|---|
-| ☐ | Hats Finance vault funded with $COWL | — |
+| ☑ | Program scope, severity mapping, known issues, platform choice | [bounty/](bounty/README.md) |
+| ☐ | Hats Finance vault funded with $COWL | needs the amount |
 | ☐ | Aztec grant application for a circuit review | — |
 | ☐ | Immunefi, Sherlock, CodeHawks or Code4rena | — |
 | ☐ | Firm engagement for the circuits | — |
@@ -179,6 +181,23 @@ external dead-man's switch is the rest.
 Hats is the natural first move: the vault funds from the creator-fee stash
 rather than from cash, and launching does not wait for a slot. The open question
 is the amount.
+
+**The document all four rows needed is written.** [bounty/](bounty/README.md)
+carries the asset table with addresses, the severity mapping — the internal
+Impact × Likelihood matrix governs, not the platform's generic table, or the same
+finding grades two ways depending on where it was reported — every 🟡 in this
+tree declared as a known issue, and the platform comparison. Three numbers are
+left and all three belong to whoever holds the creator-fee stash: vault size, the
+critical percentage and its cap, and the floor.
+
+Two things in there are worth reading before the vault is funded rather than
+after. **A bounty here is not buying a patch.** The pool is immutable, so a
+finding in `ShieldedPool.sol` cannot be fixed in place — the reward is priced
+against the difference between hearing it from a researcher and hearing it from a
+drained pool, which is all of `pooledValue`. And **the adapter's deployed
+bytecode predates the L-01/L-02 fixes**, so launching without either redeploying
+it or naming the deployed build as the in-scope artifact invites a valid report
+against a fix that already exists.
 
 ### Phase 5 — formal verification
 
