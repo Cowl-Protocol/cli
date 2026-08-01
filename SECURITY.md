@@ -29,6 +29,26 @@ it against a live deployment or only locally.
 We do not currently run a paid bounty. If that changes it will be announced
 rather than negotiated per report.
 
+## Read the deployed code first
+
+Both mainnet contracts are verified, so the source that is running is readable
+without trusting this repository:
+
+| | Address | Explorer |
+|---|---|---|
+| `ShieldedPool` | `0x6f98666e9d05431dCd765AAa289a5E346AfA6a3E` | [verified](https://robinhoodchain.blockscout.com/address/0x6f98666e9d05431dCd765AAa289a5E346AfA6a3E?tab=contract) |
+| `CowlTradeAdapter` | `0x0b86f9d1D2E0Abc8ab7C7BE39498855E8F4a3A98` | [verified](https://robinhoodchain.blockscout.com/address/0x0b86f9d1D2E0Abc8ab7C7BE39498855E8F4a3A98?tab=contract) |
+
+The pool's bytecode is byte-identical to a build from `main` — solc 0.8.35, no
+optimizer, 13,427 bytes — so a report against it can name a line here and mean
+the same line on chain.
+
+**The adapter's deployed build is `8b1c58f~1`, not `main`.** Two Low findings are
+fixed in this repository and not yet on chain, and the explorer shows the running
+version rather than the fixed one. Both are listed under
+[`audits/bounty/`](audits/bounty/README.md) as known issues; check there before
+reporting anything about the adapter.
+
 ## In scope
 
 - `contracts/src/ShieldedPool.sol` and `contracts/src/CowlTradeAdapter.sol`

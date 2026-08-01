@@ -30,8 +30,8 @@ Test baseline at the same commit, both green before and after this scan:
 | 🟢 | Path to deposited funds | — | **Neither tool found one.** Every finding read against source |
 | 🟢 | Regression gate | — | Runs on every push; fails on anything untriaged. Proven to bite — see below |
 | 🟡 | M-01 · verifier-swap escape hatch, owner is a single EOA | Medium | Mitigated — watched by [`../monitoring/`](../monitoring/README.md); **migration to a 2-of-3 Safe is prepared and runbooked**, owners generated and verified, not yet executed: [`../../deploy/multisig/`](../../deploy/multisig/README.md) |
-| 🟡 | L-01 · adapter refund `transfer` return unchecked | Low | Fixed in `8b1c58f`, **not deployed** — redeploy deferred; now pinned by failing-first tests on the ERC-20 branch |
-| 🟡 | L-02 · adapter `approve` returns unchecked, 3 sites | Low | Fixed in `8b1c58f`, **not deployed** — fails closed either way, pinned by failing-first tests |
+| 🟡 | L-01 · adapter refund `transfer` return unchecked | Low | Fixed in `8b1c58f`, **not deployed** — the running build is `8b1c58f~1`, proven by bytecode comparison and verified on the explorer; pinned by failing-first tests on the ERC-20 branch |
+| 🟡 | L-02 · adapter `approve` returns unchecked, 3 sites | Low | Same commit on chain; fails closed either way, pinned by failing-first tests |
 | 🟡 | I-01 · adapter is a one-way sink | Informational | Acknowledged — holds funds for one transaction by design |
 | 🟡 | I-02 · fee-on-transfer tokens desync their own `pooledValue` | Informational | Acknowledged — bounded per token by the turnstile |
 | 🟡 | I-03 · USDT-shaped tokens cannot shield | Informational | Acknowledged — fails closed |
@@ -386,6 +386,12 @@ figure is what matters and is not in the report:
 then caps a drain at all of `pooledValue`, which is everything. **The 7-day
 window is the entire defence, and nothing currently watches
 `VerifierSwapProposed`.** Owner is a single deployer EOA.
+
+**Both halves have moved since.** A watcher runs every 15 minutes from the VPS
+and notifies a person, and the move to a 2-of-3 Safe is rehearsed end to end on
+testnet — where the pool is already owned by one — and runbooked for mainnet at
+[`../../deploy/multisig/`](../../deploy/multisig/README.md). Mainnet ownership
+has not moved yet.
 
 Renouncing is not the answer while the verifier is unaudited — it would freeze
 an unaudited verifier permanently. The two things that shrink this are a

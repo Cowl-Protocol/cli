@@ -437,8 +437,12 @@ the machine. Verify a backup before you rely on it: one that has never been rest
   passphrases fall quickly.
 - Never run `cowl wallet export` while screen sharing or recording.
 - The CLI is non-custodial. You hold your keys; no server can move your funds.
-- This is testnet-first software. Do not point it at mainnet funds until the protocol is audited
-  and live. See the [disclaimer](https://cowlprotocol.com/disclaimer).
+- The CLI still defaults to testnet, and mainnet is live and holds real value. What stands behind
+  that is written down rather than asserted: [audits/](./audits/) tracks every check with the
+  artifact behind it, the pool and the trade adapter are both verified on the explorer, and the
+  pool's deployed bytecode is byte-identical to a build from this repository — 13,427 bytes,
+  solc 0.8.35, no optimizer. Reproduce it before you trust it. See the
+  [terms](https://www.cowlprotocol.com/terms).
 
 ---
 

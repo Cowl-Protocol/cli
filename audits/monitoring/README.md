@@ -297,7 +297,7 @@ the relayer's, in about 35 seconds.
 
 ### Scheduling
 
-Written and **not deployed**:
+**Live since 2026-08-01:**
 [`../../deploy/watch/`](../../deploy/watch/README.md) — two systemd timers, the
 15-minute check and a daily heartbeat, with the reasoning for both cadences and
 what the box needs. Installing them is a deploy and belongs to whoever holds the
