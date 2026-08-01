@@ -19,6 +19,7 @@ shows clean results is not evidence of anything.
 | 🟢 | Alarms reach a person | The watch now tells somebody: 15 delivery, suppression and refusal cases against a stub sink, 12 defences deleted one at a time, 12 caught. Nothing schedules it yet | [monitoring/](monitoring/README.md) |
 | 🟢 | Gasless relayer, from outside | Answers, serves the right chain and pool, payout address matches the baseline, and its own float figure agrees with the chain. All 7 alarms proven to fire | [monitoring/](monitoring/README.md) |
 | 🟢 | Relayer daemon, from inside | The only component holding a funded key and answering the open internet, and the last one with no test. Six findings, all fixed and **live on both relayers since 2026-08-01**; nothing reaches deposited value. 8 defences deleted one at a time, 8 caught | [relayer/](relayer/README.md) |
+| 🟢 | Two clients, one pool | The browser port and the CLI compute the same numbers: field, note, cipher, key and Merkle parity, swept over edge vectors, gated on every push in the app | [parity](https://github.com/Cowl-Protocol/app/blob/main/audits/parity/README.md) |
 | 🟢 | App and CLI code | CodeQL `security-extended` read on both repositories: 4 findings, 1 fixed, 3 rebutted with reasoning. Nothing in proving, note handling, key derivation or the wire format | [codeql/](codeql/README.md) |
 | 🟡 | Paid disclosure | Scope, severity mapping, known issues and platform are written and ready to launch; no vault is funded and the three numbers are undecided | [bounty/](bounty/README.md) |
 | 🟡 | Governance | Pool is not a proxy and cannot be edited. The one lever is a 7-day timelocked verifier swap, held by a single deployer EOA. Watched, not yet scheduled, not yet a multisig | [static/](static/README.md) · [monitoring/](monitoring/README.md) |
@@ -216,11 +217,22 @@ is most of the setup cost. It still belongs after the cheap work.
 | ☑ | Mutation harness proving the relayer alarms can fire | [monitoring/](monitoring/README.md) |
 | ☑ | Dependency gate: fails on a new install script or an untriaged advisory | [supplychain/](supplychain/README.md) |
 | ☑ | Adversarial harness against the relayer daemon itself | [relayer/](relayer/README.md) |
+| ☑ | Differential sweep of the browser port against this one | [parity](https://github.com/Cowl-Protocol/app/blob/main/audits/parity/README.md) |
 | ☑ | Mutation harness proving the notification channel can fail | [monitoring/](monitoring/README.md) |
 
 Not in the plan, added because a green suite proves nothing on its own:
 an invariant no mutation can violate is testing nothing. Six mutations, one per
 pool defence, each caught by the invariant that names it.
+
+**The cross-check is the one thing the plan named and nobody had extended.** It
+calls `crosscheck.mts` the strongest asset in the repository and says extending
+its coverage is the highest-value circuit work that costs nothing. It drew one
+random sample per property, and the disagreements worth finding do not live at a
+random point — they live at zero, at one, at the field boundary and at the limb
+carry. Every property now sweeps an edge set plus 256 random vectors, the Merkle
+tree went from no cross-check at all to three, and the whole thing runs on every
+push to the app against both checkouts. What an agreement is worth is stated per
+module rather than implied: [parity](https://github.com/Cowl-Protocol/app/blob/main/audits/parity/README.md).
 
 **The relayer daemon is beyond the plan too, and it is the gap that reading the
 plan found.** The plan ranks the relayer fourth by what it costs when it breaks
@@ -244,6 +256,7 @@ no report. [relayer/](relayer/README.md).
 | 🟢 | 2026-08-01 | Dependency gate for the app — its own baseline over its own lockfile, and a drift guard between the two copies | `Cowl-Protocol/app` 929 packages | app `0c2c364` | 8 install scripts and 27 advisories, each with a written verdict; none reachable, with bundle evidence over 225 chunks and controls proving the sweep. Gate proven to fail on all three drift classes | [supplychain/](supplychain/README.md) |
 | 🟢 | 2026-08-01 | Adapter ERC-20 input leg — the two `trade()` branches no proof fixture reaches, and the surplus refund L-01 exists for | `CowlTradeAdapter.sol` | `ce11804` | 4 tests added, 78 total. Both mutations caught: dropping the return check and removing the refund each fail a test that names them. The recorded gap was a missing test, not a missing fixture, and the report says so | [static/](static/README.md) |
 | 🟡 | 2026-08-01 | Relayer daemon — adversarial cases against the real process over a stub chain, plus the mutants that prove each case bites | `src/relayer/{server,client,rebalance}.ts` | `90836c5` | 6 findings, all fixed: 1 Medium (one dust pool set the fee for a whole token), 2 Low (an endpoint hiccup killed the daemon; 6 uncapped RPC calls per anonymous request), 3 Informational. 8/8 mutants caught. One residual named. Deployed to both relayers the same day, proven running rather than merely installed | [relayer/](relayer/README.md) |
+| 🟢 | 2026-08-01 | Cross-client parity — the browser port against this one, swept, plus the mutations that prove the sweeps bite | `app/lib/shielded/*`, `cli/src/shielded/*` | app `69787e5` | Field, note, cipher, key and Merkle parity hold across edge and random vectors. Merkle had no cross-check before and now has three, including the insertion witness's double walk. 4 mutations, 4 caught; a 5th survived correctly and is recorded. Now a push gate | [parity](https://github.com/Cowl-Protocol/app/blob/main/audits/parity/README.md) |
 | 🟢 | 2026-08-01 | Notification channel — delivery, suppression and refusal against a stub sink, plus the mutants that prove each case bites | `scripts/notify.mjs`, `deploy/watch/` | working tree at `45399ff` | 15 cases pass, 12/12 mutants caught. A fourth exit code for "nobody was told"; plaintext sinks, redirects and group-readable secrets all refused. Scheduling units written and deliberately not deployed | [monitoring/](monitoring/README.md) |
 | 🟢 | 2026-07-31 | CodeQL `security-extended`, run locally at 2.26.2 after checksum verification | `Cowl-Protocol/cli` 43 files, `Cowl-Protocol/app` 76 files | working tree at `e6d254a` + uncommitted | 4 findings. 1 real and fixed (a check-then-use race in code from the same session, fix verified by re-running); 2 configurable-endpoint reports with no privilege boundary; 1 false positive on a dedicated worker | [codeql/](codeql/README.md) |
 
