@@ -176,7 +176,7 @@ so are not there from a clean clone.
 | Job | Runs | Proven locally |
 |---|---|---|
 | `web` | `npm ci`, `typecheck`, `test:offline`, `build` | lockfile in sync; `tsc --noEmit` clean; eight checks pass; production build succeeds |
-| `parity` | both repositories checked out, then `crosscheck.mts --offline` | field, note, cipher, key and Merkle parity, ~4s |
+| `parity` | both repositories checked out, then `crosscheck.mts --offline` and `tradecheck.mts --offline` | field, note, cipher, key and Merkle parity in ~4s; the trade plan, value conservation and CLI wire parity in 20 checks |
 | `supplychain` | `audits/supplychain/check.mjs` over its own lockfile | 8 install scripts and 27 advisories, each with a written verdict |
 
 `test:offline` is eight of the seventeen verify scripts: `capcheck`,
@@ -186,8 +186,8 @@ network, and each finishes in under a second. `retrycheck` in particular guards
 the resume-never-restart rule that exists because a retry once re-sent eight
 deposits that had already landed.
 
-`crosscheck` is the ninth, and it is its own job because it is the only one that
-reads another repository.
+`crosscheck` and `tradecheck` are the ninth and tenth, in their own job because
+they are the two that read another repository.
 
 **The claim this section used to make about it was wrong, and it is worth saying
 so plainly.** It read: *"crosscheck and tradecheck import from `../../cli`,
@@ -201,14 +201,26 @@ crosscheck builds a real proof — was answered by giving it an `--offline` mode
 that skips the prover and the chain replay. Neither obstacle was structural.
 Both were defaults nobody had pushed on.
 
-The eight still excluded, for two reasons rather than three:
+`tradecheck` came in the same way, and it took a second look to see it. The
+first version of this rewrite still listed it as excluded "because it also needs
+a venue" — which was repeating the reason rather than checking it. Five of its
+seven sections need nothing but source: the spend leg binding the adapter, value
+conservation to the wei, the legs chaining, byte-identical wire format against
+the CLI, and the executor's promises pinned in source. Only the venue and relayer
+quotes reach a network, and `--offline` drops exactly those. Twenty checks now
+run on every push that never did.
+
+The seven still excluded, for two reasons rather than three:
 
 - `assetscheck`, `holdingscheck`, `pricecheck`, `rpccheck`, `relaycheck`,
   `feecheck` read live chain, relayer or price data, so they fail for reasons
   that have nothing to do with the commit under test.
 - `sendcheck` builds a real proof, which pulls the 52MB CRS and takes minutes.
-- `tradecheck` imports from `../../cli` **and** needs a venue. The two-checkout
-  job would carry the first half; the second is why it was left alone.
+
+**Both remaining reasons are about what a gate should be, not about what is
+possible.** That distinction is the lesson of this section: the previous version
+of it called an exclusion *structural* when it was a default nobody had pushed
+on, and two scripts came into CI the moment somebody did.
 
 ## Supply chain
 
