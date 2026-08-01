@@ -113,6 +113,32 @@ about 130 spends an hour. It is deliberately far above the daemon's own
 A private trade burns roughly **two spends' worth** of gas, so trades stop before
 sends do.
 
+### Proven against a real swap, not a simulation
+
+**2026-08-01, testnet.** The governance alarms had only ever been proven by
+moving the recorded baseline — a simulation of drift rather than drift. During
+the multisig rehearsal ([`../../deploy/multisig/`](../../deploy/multisig/README.md))
+a verifier swap was genuinely proposed on the testnet pool, by the new Safe, and
+this watcher was run against it cold:
+
+```
+ALERT  owner CHANGED
+       was 0xd5F69BCf…2eff   now 0x708c36A9…54f3
+ALERT  shield VERIFIER SWAP PENDING
+       proposed verifier 0x…dEaD
+       executable in 168.0h, at 2026-08-08T15:26:36.000Z
+2 alerts.
+```
+
+Both fired, on the first run, with no prompting. **168.0 hours** is the number
+worth looking at twice: the 7-day window this whole file is built around was read
+off the chain correctly, which is the thing a simulated baseline change can never
+demonstrate. The swap was then cancelled from the Safe and the watcher returned
+to `no shield verifier swap pending` on the next run.
+
+The testnet baseline was re-recorded afterwards, because the ownership change was
+deliberate — the step that stops a legitimate move from alarming forever.
+
 ### Proven able to fire
 
 [`mutants.mjs`](mutants.mjs) stands a stub relayer up on loopback, points
