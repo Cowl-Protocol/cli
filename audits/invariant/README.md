@@ -112,6 +112,13 @@ of the code it guards can violate is testing nothing at all.
 paired invariant to catch it. The source is edited in place and restored by a
 trap, including on interrupt.
 
+**One mutation harness at a time.** This one edits first-party source in place,
+and so do three others in this tree. Since 2026-08-01 they share a lock — two at
+once would mean the second one's "original" was the first one's mutant, and its
+restore would write a weakened file back as the baseline. It refuses rather than
+queues, and takes over a lock older than an hour so a crashed run cannot block
+the tree. [`../lib/mutation-lock.mjs`](../lib/mutation-lock.mjs).
+
 | Mutant | The defence it removes | Caught by |
 |---|---|---|
 | `double-credit` | `shield` credits `value * 2` to `pooledValue` | invariant 1 |

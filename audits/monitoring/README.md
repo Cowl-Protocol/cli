@@ -137,6 +137,13 @@ that never ran. That is not hypothetical: the first version used `spawnSync`,
 whose blocked event loop starved the stub server living in the same process, and
 the timeout that followed left the file mutated.
 
+**One mutation harness at a time.** This one edits first-party source in place,
+and so do three others in this tree. Since 2026-08-01 they share a lock — two at
+once would mean the second one's "original" was the first one's mutant, and its
+restore would write a weakened file back as the baseline. It refuses rather than
+queues, and takes over a lock older than an hour so a crashed run cannot block
+the tree. [`../lib/mutation-lock.mjs`](../lib/mutation-lock.mjs).
+
 ## The notification channel
 
 Every alarm above was proven able to fire, and every one of them fired into a
@@ -253,9 +260,11 @@ seconds behind a one-second deadline, and only a run that actually killed it
 comes back inside five.
 
 The mutant is a **sibling copy** of `notify.mjs` rather than an edit of it. The
-other two harnesses in this tree mutate their target in place and each carries a
-paragraph about what happens when the restore does not run; a copy has no
-restore to get wrong, and the original is never opened for writing.
+other three harnesses in this tree mutate their target in place and each carries
+a paragraph about what happens when the restore does not run; a copy has no
+restore to get wrong, and the original is never opened for writing. It is also
+why this is the one harness that does **not** take the shared mutation lock:
+holding a lock protects a baseline, and this harness never puts one at risk.
 
 The whole harness reaches no network and reads no chain, so it runs in CI beside
 the relayer's, in about 35 seconds.

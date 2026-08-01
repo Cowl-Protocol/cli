@@ -36,7 +36,7 @@ not changed.
 | 🟢 | cli · nargo test | 32 circuit tests, the circuit mutation harness 17/17, public inputs vs the pool | green |
 | 🟢 | cli · static analysis | slither 0.11.5 and aderyn 0.6.8 against the recorded baseline, fails on anything untriaged | green |
 | 🟢 | cli · relayer daemon under attack | the real daemon over a stub chain: 8 cases, then 8/8 mutants, plus the notification channel: 15 cases, then 12/12 mutants. No network, no key, loopback only | added 2026-08-01, lands with the push that carries it |
-| 🟢 | app · typecheck, offline checks, build | types, four offline verify scripts, production build | green |
+| 🟢 | app · typecheck, offline checks, build | types, eight offline verify scripts, production build | green |
 | 🟢 | Supply chain | every action pinned to a full commit SHA, `contents: read`, no secrets | green |
 | 🟢 | app · agrees with the CLI | both repositories checked out, the offline cross-check: field, note, cipher, key and Merkle parity | added 2026-08-01, lands with the push that carries it |
 | 🟡 | I-01 · the app's `lint` script had never run | eslint 9, no config of any kind, so it exited 2 on every invocation since it was added | **config written, lint runs, backlog measured** — still not a gate |
@@ -140,7 +140,7 @@ are listed in [`../README.md`](../README.md).
 | `contracts` | `forge test` | 78 passed, 0 failed |
 | `mutants` | `audits/invariant/mutants.sh` | 6/6 mutants caught, source restored |
 | `supplychain` | `audits/supplychain/check.mjs` — install-script and advisory baseline | 2 install scripts accepted, 1 advisory triaged; proven to bite on all three drift classes |
-| `relayer` | `audits/relayer/attack.mjs`, then `audits/relayer/mutants.mjs` | 8/8 cases held in 8s; 8/8 mutants caught, sources restored byte for byte |
+| `relayer` | `audits/relayer/attack.mjs`, `audits/relayer/mutants.mjs`, then `audits/monitoring/notify-mutants.mjs` | 8/8 cases held in 8s; 8/8 mutants caught, sources restored byte for byte; the notification channel's 15 cases and 12/12 mutants in 35s |
 | `circuits` | `nargo test` in `notes`, `shield`, `transfer`; then `audits/circuits/mutants.mjs`; then `nargo compile` and `audits/circuits/publicinputs.mjs` | 3 + 6 + 23 = 32 tests passed; 17/17 circuit mutants caught; 14 and 6 public inputs matched |
 
 `forge test` runs from a clean clone with no `forge install` and no circuit
@@ -154,37 +154,61 @@ check whether the tree is safe to install would run the very scripts it exists t
 notice. It is also the only job in the file that looks at what arrives from
 outside; every other one reads code somebody here wrote.
 
-**Both mutation harnesses run on every push**, and they are the pair that would
-be easiest to leave out and hardest to notice missing. Without them an invariant
-or a circuit test can be quietly weakened into one that constrains nothing, and
-the suite stays green while covering less every month. Together they cost about
-40 seconds.
+**Every mutation harness runs on every push** — four of them now: the invariant
+suite's, the circuits', the relayer's and the notification channel's. They are
+the ones that would be easiest to leave out and hardest to notice missing.
+Without them a test can be quietly weakened into one that constrains nothing,
+and the suite stays green while covering less every month.
+
+They are also the only jobs that edit first-party source, and since 2026-08-01
+they share a lock so two can never run at once — the second one's "original"
+would be the first one's mutant, and its restore would write a weakened file
+back as the baseline. CI runs them on separate runners, so the lock is never
+contended there; it is for the machine where somebody starts two by hand, which
+is how it was found. See [`../README.md`](../README.md).
 
 The `circuits` job also compiles `transfer` and `shield` before checking their
 public inputs against the pool, because the compiled artifacts are gitignored and
 so are not there from a clean clone.
 
-## app — one job
+## app — three jobs
 
 | Job | Runs | Proven locally |
 |---|---|---|
-| `web` | `npm ci`, `typecheck`, `test:offline`, `build` | lockfile in sync; `tsc --noEmit` clean; four checks pass; production build succeeds in 13s |
+| `web` | `npm ci`, `typecheck`, `test:offline`, `build` | lockfile in sync; `tsc --noEmit` clean; eight checks pass; production build succeeds |
+| `parity` | both repositories checked out, then `crosscheck.mts --offline` | field, note, cipher, key and Merkle parity, ~4s |
+| `supplychain` | `audits/supplychain/check.mjs` over its own lockfile | 8 install scripts and 27 advisories, each with a written verdict |
 
-`test:offline` is four of the thirteen verify scripts: `capcheck`, `mergecheck`,
-`qrcheck`, `retrycheck`. They are properties of the source, need no network, and
-each finishes in under a second. `retrycheck` in particular guards the
-resume-never-restart rule that exists because a retry once re-sent eight
+`test:offline` is eight of the seventeen verify scripts: `capcheck`,
+`mergecheck`, `qrcheck`, `retrycheck`, `synccheck`, `maxcheck`,
+`transportcheck`, `publicbookcheck`. They are properties of the source, need no
+network, and each finishes in under a second. `retrycheck` in particular guards
+the resume-never-restart rule that exists because a retry once re-sent eight
 deposits that had already landed.
 
-The other nine are excluded, for three different reasons:
+`crosscheck` is the ninth, and it is its own job because it is the only one that
+reads another repository.
+
+**The claim this section used to make about it was wrong, and it is worth saying
+so plainly.** It read: *"crosscheck and tradecheck import from `../../cli`,
+which does not exist in a clone of the app repository on its own. This one is
+structural: those two scripts can only ever run from the workspace layout, never
+from app CI."*
+
+Structural was the wrong word. A workflow can check out two repositories, which
+is what the `parity` job does; and the other half of the exclusion — that
+crosscheck builds a real proof — was answered by giving it an `--offline` mode
+that skips the prover and the chain replay. Neither obstacle was structural.
+Both were defaults nobody had pushed on.
+
+The eight still excluded, for two reasons rather than three:
 
 - `assetscheck`, `holdingscheck`, `pricecheck`, `rpccheck`, `relaycheck`,
-  `feecheck` read live chain, relayer or price data.
-- `sendcheck` and `crosscheck` build real proofs, which pulls the 52MB CRS and
-  takes minutes.
-- `crosscheck` and `tradecheck` import from `../../cli`, which does not exist in
-  a clone of the app repository on its own. **This one is structural**: those two
-  scripts can only ever run from the workspace layout, never from app CI.
+  `feecheck` read live chain, relayer or price data, so they fail for reasons
+  that have nothing to do with the commit under test.
+- `sendcheck` builds a real proof, which pulls the 52MB CRS and takes minutes.
+- `tradecheck` imports from `../../cli` **and** needs a venue. The two-checkout
+  job would carry the first half; the second is why it was left alone.
 
 ## Supply chain
 

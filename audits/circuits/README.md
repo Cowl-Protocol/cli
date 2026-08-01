@@ -162,6 +162,13 @@ pairing table: 14 for `spend`, 6 for `shield`. It was verified to bite by
 swapping `recipient` and `relayer` in the pool and confirming it reports both
 positions, after which the contract was restored byte-identical.
 
+**One mutation harness at a time.** This one edits first-party source in place,
+and so do three others in this tree. Since 2026-08-01 they share a lock — two at
+once would mean the second one's "original" was the first one's mutant, and its
+restore would write a weakened file back as the baseline. It refuses rather than
+queues, and takes over a lock older than an hour so a crashed run cannot block
+the tree. [`../lib/mutation-lock.mjs`](../lib/mutation-lock.mjs).
+
 ## Observations
 
 Neither is a vulnerability. Both are places where the property holds for the
