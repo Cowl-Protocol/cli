@@ -217,6 +217,7 @@ is most of the setup cost. It still belongs after the cheap work.
 | ☑ | Mutation harness proving the relayer alarms can fire | [monitoring/](monitoring/README.md) |
 | ☑ | Dependency gate: fails on a new install script or an untriaged advisory | [supplychain/](supplychain/README.md) |
 | ☑ | Adversarial harness against the relayer daemon itself | [relayer/](relayer/README.md) |
+| ☑ | A lock so two mutation harnesses cannot restore each other's mutants | [lib/mutation-lock.mjs](lib/mutation-lock.mjs) |
 | ☑ | Differential sweep of the browser port against this one | [parity](https://github.com/Cowl-Protocol/app/blob/main/audits/parity/README.md) |
 | ☑ | Mutation harness proving the notification channel can fail | [monitoring/](monitoring/README.md) |
 
@@ -241,6 +242,62 @@ nothing in this tree had done is read the process itself: it holds a funded key,
 listens on a public port, and signs on the strength of a payload written by an
 anonymous caller, and it was the only component in the protocol with no test and
 no report. [relayer/](relayer/README.md).
+
+## Re-verified at HEAD
+
+A status board that is green because each report was green **when it was
+written** is a weaker claim than it looks. Everything in this tree was re-run on
+**2026-08-01** at `3a57081`, on one machine, in one pass.
+
+| Harness | Result |
+|---|---|
+| `forge test` | 78 passed |
+| `test:invariant` | 10 passed across 3 suites |
+| `test:mutants` | 6/6 caught |
+| `test:circuits` | 32 passed — notes 3, shield 6, transfer 23 |
+| `test:circuit-mutants` | 17/17 caught, circuits restored |
+| `test:publicinputs` | circuit and pool agree on all 14 of `spend` and 6 of `shield` |
+| `test:relayer` | 8/8 held |
+| `test:relayer-mutants` | 8/8 caught, sources restored byte for byte |
+| `test:notify` | 15 cases, 12/12 mutants caught |
+| `test:watch-mutants` | 7/7 caught |
+| `test:scanners` | no new findings — 23 fingerprints, 32 instances, all triaged |
+| `test:supplychain` | 1 advisory, all triaged, nothing new |
+| `npm run watch` | all clear, both pools, turnstile exact |
+| app `crosscheck` (full) | all passed, including the mainnet replay — 368 leaves rebuilding the chain's root — and a real shield proof, 7,232 bytes in 939 ms |
+| app `test:offline` | all green |
+| `typecheck`, both repositories | clean |
+
+The pass also found something, which is the point of running it rather than
+trusting the board.
+
+### The mutation harnesses could corrupt each other
+
+Four harnesses here prove their suites can fail by editing first-party source
+**in place** and restoring it after. Each is careful about its own restore, on
+signals as well as on exit. **None of them was careful about the other three.**
+
+It surfaced in the harmless direction first: `npm run test:circuits` was started
+while the circuit mutant harness was mid-run, and the clean suite reported two
+failures that were not real. The harmful direction is two *mutating* harnesses
+overlapping, because the second one's "original" is the first one's mutant — and
+its restore then writes a weakened file back **as the baseline**. A circuit
+missing one constraint, restored as though it were the source, is precisely the
+quiet failure this tree exists to catch.
+
+They now share a lock: [`lib/mutation-lock.mjs`](lib/mutation-lock.mjs), a
+directory rather than a file because `mkdir` is atomic in node and in bash, and
+the invariant harness is a shell script. Refusing is the right behaviour rather
+than queueing — these runs take minutes and a developer who started the wrong
+one wants to be told. A lock older than an hour is taken over, so a crashed run
+cannot block the tree forever.
+
+All four were confirmed to refuse while it is held, and all four were re-run
+with it wired in: 17/17, 8/8, 6/6 and 7/7, every source restored.
+
+`test:notify` deliberately does **not** take it. It is the one harness that
+mutates a *copy* rather than the original, which is why it has no restore to get
+wrong, and why it cannot corrupt anything another harness is holding.
 
 ## Reports
 

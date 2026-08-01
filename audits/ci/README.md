@@ -38,11 +38,48 @@ not changed.
 | 🟢 | cli · relayer daemon under attack | the real daemon over a stub chain: 8 cases, then 8/8 mutants, plus the notification channel: 15 cases, then 12/12 mutants. No network, no key, loopback only | added 2026-08-01, lands with the push that carries it |
 | 🟢 | app · typecheck, offline checks, build | types, four offline verify scripts, production build | green |
 | 🟢 | Supply chain | every action pinned to a full commit SHA, `contents: read`, no secrets | green |
-| 🟡 | I-01 · the app's `lint` script has never worked | eslint 9 installed, no config file of any kind | open, deliberately not a gate |
+| 🟢 | app · agrees with the CLI | both repositories checked out, the offline cross-check: field, note, cipher, key and Merkle parity | added 2026-08-01, lands with the push that carries it |
+| 🟡 | I-01 · the app's `lint` script had never run | eslint 9, no config of any kind, so it exited 2 on every invocation since it was added | **config written, lint runs, backlog measured** — still not a gate |
 
-**No gate reaches the network for a verdict**, which is the design rule below.
-The only 🟡 is the app's lint script: it exits 2 today and always has, and a gate
-that is red on its first run teaches everyone to ignore the red.
+**No gate reaches the network for a verdict**, with one deliberate exception:
+the app's new `parity` job checks out the CLI as well, because what it verifies
+is that two implementations compute the same numbers. It reaches another
+repository rather than the network, and a change on the CLI's main turning it red
+is the behaviour that job exists for.
+
+### I-01, moved but not closed
+
+The app's `lint` script now runs. `eslint.config.mjs` did not exist, and flat
+config is mandatory in eslint 9, so `npm run lint` had exited 2 on every
+invocation since the day it was added.
+
+**What it found, measured 2026-08-01: 35 errors and 6 warnings.**
+
+| Rule | Count | What it is |
+|---|---|---|
+| `react-hooks/set-state-in-effect` | 20 | setState called synchronously in an effect body |
+| `react-hooks/preserve-manual-memoization` | 5 | memoization the compiler cannot preserve |
+| `react-hooks/immutability` · `refs` · `purity` | 6 | refs written during render, one impure call during render |
+| `prefer-const` | 3 | mechanical |
+| `@next/next/no-html-link-for-pages` | 1 | an `<a>` where a `<Link>` belongs |
+| `react-hooks/exhaustive-deps` and other warnings | 6 | |
+
+**It is still not a gate, and the reason has changed.** It used to be that a
+script which cannot run cannot gate anything. Now it is that 31 of the 35 errors
+come from the React Compiler ruleset, and clearing them means restructuring
+effects inside the live wallet provider — `ShieldedProvider.tsx` alone holds ten.
+That is a change to code that signs and spends, made to satisfy a linter that was
+installed the day before, and it is not a change to make in the same pass that
+installed the linter.
+
+The finding worth a second look is the `refs`/`immutability` cluster: a ref
+assigned during render to mirror a prop is the pattern React's concurrent
+rendering makes unsafe, and three of those sit in the provider that holds the
+shielded keys. Reading them is worth doing; six of them are one line each.
+
+Nothing here reaches deposited value, and the build is unaffected — Next 16 no
+longer runs ESLint during `next build`, which was confirmed by building with the
+config in place rather than assumed.
 
 **Both workflows went green on their first real run**, and have stayed green
 since the circuit harness extended the `circuits` job.

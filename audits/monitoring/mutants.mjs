@@ -24,6 +24,7 @@ import { createServer } from "node:http";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { takeMutationLock } from "../lib/mutation-lock.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(HERE, "../..");
@@ -34,6 +35,9 @@ const NET = "robinhood-testnet";
 // Unique because mainnet's URL carries a /mainnet suffix, so the closing quote
 // is what makes this match the testnet entry and only the testnet entry.
 const TESTNET_RELAY = '"https://relay.cowlprotocol.com"';
+
+// Before the read below, which is this harness's idea of the truth.
+takeMutationLock("monitoring/mutants.mjs");
 
 const original = readFileSync(NETWORKS, "utf8");
 if (!original.includes(TESTNET_RELAY)) {

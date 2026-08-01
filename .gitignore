@@ -7,6 +7,8 @@ dist
 # what one box has already told a person is not a fact about the repository.
 .watch-state.json
 .watch-state.json.lock
+# Held while a mutation harness has first-party source edited in place.
+.mutation.lock
 # Build output, except the proof fixtures the Solidity tests verify against.
 # Without them `forge test` cannot run from a clean clone, and that suite is the
 # only place the whole chain — note math, circuit, proof, verifier, pool — is

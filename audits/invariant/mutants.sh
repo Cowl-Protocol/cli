@@ -24,8 +24,22 @@ POOL="$CONTRACTS/src/ShieldedPool.sol"
 # and on a CI runner.
 BACKUP="$(mktemp "${TMPDIR:-/tmp}/ShieldedPool.sol.orig.XXXXXX")"
 
+# One mutation harness at a time, across the whole tree. Four of them edit
+# first-party source in place, and the second one's "original" is the first
+# one's mutant — so its restore would write a weakened file back as the
+# baseline. A directory, because mkdir is atomic here and in the node harnesses
+# that share this lock. See audits/lib/mutation-lock.mjs.
+LOCK="$(cd "$HERE/../.." && pwd)/.mutation.lock"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  echo "Another mutation harness is running: $(cat "$LOCK/owner" 2>/dev/null || echo "an unknown harness")." >&2
+  echo "Wait for it, or remove $LOCK if you are sure it is dead." >&2
+  rm -f "$BACKUP"
+  exit 2
+fi
+echo "invariant/mutants.sh, pid $$" > "$LOCK/owner"
+
 cp "$POOL" "$BACKUP"
-restore() { cp "$BACKUP" "$POOL"; rm -f "$BACKUP"; }
+restore() { cp "$BACKUP" "$POOL"; rm -f "$BACKUP"; rm -rf "$LOCK"; }
 trap restore EXIT INT TERM
 
 # name | invariant that must fail | perl expression applied to ShieldedPool.sol

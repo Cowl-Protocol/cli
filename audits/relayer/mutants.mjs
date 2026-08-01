@@ -17,6 +17,7 @@ import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { takeMutationLock } from "../lib/mutation-lock.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(HERE, "../..");
@@ -151,6 +152,10 @@ if (ONLY && chosen.length === 0) {
   console.error(`No mutant named ${ONLY}. Have: ${MUTANTS.map((m) => m.name).join(", ")}`);
   process.exit(2);
 }
+
+// Before anything is read: two mutating harnesses at once can restore one
+// another's mutant as the baseline.
+takeMutationLock("relayer/mutants.mjs");
 
 const originals = new Map([
   [SERVER, readFileSync(SERVER, "utf8")],

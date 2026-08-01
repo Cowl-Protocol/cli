@@ -27,6 +27,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { takeMutationLock } from "../lib/mutation-lock.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CIRCUITS = join(HERE, "../../circuits");
@@ -188,6 +189,10 @@ if (wanted && chosen.length === 0) {
   console.error(`no mutant named ${wanted}`);
   process.exit(2);
 }
+
+// Before anything is read, so the snapshot below cannot capture another
+// harness's mutant as this one's original.
+takeMutationLock("circuits/mutants.mjs");
 
 // Snapshot every file we might touch, and put it back whatever happens.
 const originals = new Map();
