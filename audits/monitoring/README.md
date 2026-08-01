@@ -21,7 +21,7 @@ piece of infrastructure the whole gasless path depends on.
 | 🟢 | Every alarm actually fires | governance and turnstile against simulated drift; all 7 relayer alarms against [`mutants.mjs`](mutants.mjs) |
 | 🟢 | Every alarm reaches a person | 15 cases against a stub sink, 12 defences deleted one at a time, 12 caught |
 | 🟡 | Mainnet relayer float | 0.0388 ETH, about **337 spends** on 2026-08-01. Above the alert floor, inside the watch band |
-| 🟡 | Nothing schedules the watcher | units written and proven locally; installing them is a deploy |
+| 🟢 | Something schedules it | **live on the VPS since 2026-08-01** — mainnet every 15 minutes, heartbeat daily 09:01 UTC |
 
 **The pool has no pause.** If this alarms, the levers are: stop the relayers,
 banner the app, tell people to withdraw self-paid. That is the whole playbook and
@@ -442,9 +442,9 @@ takes the escape hatch with it permanently. Verify the destination can call
 
 ## Not yet done
 
-- **Nothing runs this on a schedule yet.** The units exist and are proven
-  locally; installing them on the VPS beside the relayers is a deploy, and this
-  row closes when a timer is actually firing.
+- ~~Nothing runs this on a schedule.~~ **Closed 2026-08-01.** Both timers are
+  live on the VPS beside the relayers, pinned to mainnet. The first automated run
+  read the pool, found nothing, and said nothing.
 - **Nothing notices the watch itself dying.** The daily heartbeat is a message
   whose absence is the signal, and an absence is only a signal to somebody
   looking for it. An external dead-man's switch is the real answer and needs an

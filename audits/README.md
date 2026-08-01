@@ -17,6 +17,7 @@ shows clean results is not evidence of anything.
 | 🟢 | Continuous integration | 7 jobs in the cli and 3 in the app, green since the first run, every action SHA-pinned. All four mutation harnesses run on every push | [ci/](ci/README.md) |
 | 🟢 | Supply chain | Nothing in either tree reaches a user's keys: every advisory read and rebutted with bundle evidence. One install script in what a user installs, and the CLI is proven to work without it. **Both repositories** gated on every push against their own baseline, by the same gate, kept from drifting apart by a recorded hash | [supplychain/](supplychain/README.md) |
 | 🟢 | Alarms reach a person | The watch now tells somebody: 15 delivery, suppression and refusal cases against a stub sink, 12 defences deleted one at a time, 12 caught. Nothing schedules it yet | [monitoring/](monitoring/README.md) |
+| 🟢 | Somebody is watching, on a clock | Mainnet checked every 15 minutes from the VPS since 2026-08-01, alarms delivered to a private channel, daily heartbeat so a dead timer is noticeable | [monitoring/](monitoring/README.md) |
 | 🟢 | Gasless relayer, from outside | Answers, serves the right chain and pool, payout address matches the baseline, and its own float figure agrees with the chain. All 7 alarms proven to fire | [monitoring/](monitoring/README.md) |
 | 🟢 | Relayer daemon, from inside | The only component holding a funded key and answering the open internet, and the last one with no test. Six findings, all fixed and **live on both relayers since 2026-08-01**; nothing reaches deposited value. 8 defences deleted one at a time, 8 caught | [relayer/](relayer/README.md) |
 | 🟢 | Two clients, one pool | The browser port and the CLI compute the same numbers: field, note, cipher, key and Merkle parity, swept over edge vectors, gated on every push in the app | [parity](https://github.com/Cowl-Protocol/app/blob/main/audits/parity/README.md) |
@@ -143,7 +144,7 @@ releases happen, and it belongs to whoever holds the npm account.
 | ☑ | State watcher, recorded baseline, response playbook | [monitoring/](monitoring/README.md) |
 | ☑ | Relayer float check | [monitoring/](monitoring/README.md) |
 | ☑ | Notification channel | [monitoring/](monitoring/README.md) |
-| ☐ | Scheduled runs on the VPS | units written, [deploy/watch/](../deploy/watch/README.md); installing them is a deploy |
+| ☑ | Scheduled runs on the VPS | **live since 2026-08-01** — [deploy/watch/](../deploy/watch/README.md) |
 | ☐ | Tenderly or Forta alert on turnstile divergence | — |
 
 `npm run watch` is written, proven to alarm, and run by hand. It covers the
@@ -162,12 +163,18 @@ whether anyone still reads the channel in a month, and it says `RECOVERED` out
 loud because going quiet after an alert is indistinguishable from the alert
 clearing.
 
-The clock is written and **not installed**: two systemd timers in
-[`../deploy/watch/`](../deploy/watch/README.md), the 15-minute check and a daily
-heartbeat. Putting them on the VPS is a deploy. The residual is named where it
-belongs — a timer that stops firing sends nothing, and nothing is what a healthy
-quiet run looks like too; the heartbeat is the cheap half of that answer and an
-external dead-man's switch is the rest.
+**And the clock is running.** Both timers went live on the VPS on 2026-08-01:
+the mainnet check every 15 minutes, and a daily heartbeat. The first automated
+run passed and, correctly, **said nothing** — `not notifying: nothing to say` is
+the line that decides whether anyone still reads the channel in a month.
+
+Pinned to mainnet on purpose. Left alone the watcher checks every network with a
+pool, and the testnet one holds nothing: a flaky testnet RPC would page somebody
+for work nobody has to do.
+
+The residual is named where it belongs — a timer that stops firing sends nothing,
+and nothing is what a healthy quiet run looks like too. The heartbeat is the
+cheap half of that answer and an external dead-man's switch is the rest.
 
 ### Phase 4 — human eyes
 

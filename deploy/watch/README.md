@@ -9,8 +9,10 @@ It says what each alarm means and what to do when one fires — a notification
 that reaches somebody who does not know the playbook is a notification that
 wakes them up for nothing.
 
-**This bundle is written, proven locally, and not deployed.** Every command
-below is for a human at the VPS.
+**Live on the VPS since 2026-08-01.** The steps below are what was run, kept as
+the runbook for rebuilding it or standing up a second one. `git pull` in
+`/opt/cowl-watch/cli` — **as the `cowl-watch` user**, or git refuses the
+directory as dubiously owned — is how the box picks up a change.
 
 ## What runs
 
