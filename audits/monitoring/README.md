@@ -342,8 +342,11 @@ emergency.
 
 1. **Was it you?** The owner key is a single deployer EOA. If the proposal was
    not deliberate, treat the key as compromised.
-2. If it was not deliberate, the owner can still call `cancelVerifierSwap` —
-   *if* the key is still yours. Try that first.
+2. Try `cancelVerifierSwap`. **Expect it to be gone.** `transferOwnership` has
+   no delay — it is a single instant call — so whoever holds a stolen key can
+   take ownership in the same breath as proposing the swap, and a competent one
+   will. The cancel lever is worth one attempt and no planning: assume from the
+   first minute that the response is evacuation, not cancellation.
 3. If the key is gone, the 7 days belong to the depositors. Stop the relayers,
    put a notice on the app, and tell people to withdraw. Withdrawal does not
    need the relayer or our infrastructure; the CLI can spend self-paid against
@@ -398,6 +401,18 @@ and the availability of the gasless path.
 Ownership moved. If it was not you, every other check in the run is
 untrustworthy, because whoever holds the key can propose a swap at will. Same
 response as an undeliberate pending swap, minus the option to cancel.
+
+**This alarm and `VERIFIER SWAP PENDING` will usually arrive together**, and the
+order tells you nothing useful — `transferOwnership` is instant and unqueued, so
+an attacker who wants both has both before either alarm is read. Treat either one
+alone as the full incident.
+
+The same instant, single-step transfer is a hazard in the other direction, and it
+is the one to be careful about **when ownership moves to a multisig on purpose**:
+there is no two-step accept and no way back. An address that cannot sign — a
+Safe that was never deployed on this chain, a typo that passes the zero check —
+takes the escape hatch with it permanently. Verify the destination can call
+`cancelVerifierSwap` on a testnet pool before pointing mainnet at it.
 
 ## Not yet done
 
