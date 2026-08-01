@@ -22,7 +22,7 @@ shows clean results is not evidence of anything.
 | 🟢 | Two clients, one pool | The browser port and the CLI compute the same numbers: field, note, cipher, key and Merkle parity, swept over edge vectors, gated on every push in the app | [parity](https://github.com/Cowl-Protocol/app/blob/main/audits/parity/README.md) |
 | 🟢 | App and CLI code | CodeQL `security-extended` read on both repositories: 4 findings, 1 fixed, 3 rebutted with reasoning. Nothing in proving, note handling, key derivation or the wire format | [codeql/](codeql/README.md) |
 | 🟡 | Paid disclosure | Scope, severity mapping, known issues and platform are written and ready to launch; no vault is funded and the three numbers are undecided | [bounty/](bounty/README.md) |
-| 🟡 | Governance | Pool is not a proxy and cannot be edited. The one lever is a 7-day timelocked verifier swap, held by a single deployer EOA. Watched, not yet scheduled, not yet a multisig | [static/](static/README.md) · [monitoring/](monitoring/README.md) |
+| 🟡 | Governance | Pool is not a proxy and cannot be edited. The one lever is a 7-day timelocked verifier swap, held by a single deployer EOA. Watched; the move to a 2-of-3 Safe is runbooked with its owners generated and proven able to sign, and not yet executed | [static/](static/README.md) · [monitoring/](monitoring/README.md) |
 | 🟡 | Trade adapter | L-01 and L-02 are fixed in source and now both pinned by tests that fail without them, including the ERC-20 input leg that had none; the deployed adapter still predates the fixes because a redeploy was deliberately deferred | [static/](static/README.md) |
 | 🟡 | Circuit residuals | Two properties the circuits do not carry alone. Both are held by the pool or need a token that does not exist. Closing either costs a timelocked verifier swap | [circuits/](circuits/README.md) |
 | 🟡 | Relayer fee pricing | The fee a relayer demands in an ERC-20 comes from a venue quote, and a bound on how far the tiers may disagree is not a proof that any of them is honest. An attacker can now deny a token, never underpay for one | [relayer/](relayer/README.md) |
@@ -218,6 +218,7 @@ is most of the setup cost. It still belongs after the cheap work.
 | ☑ | Dependency gate: fails on a new install script or an untriaged advisory | [supplychain/](supplychain/README.md) |
 | ☑ | Adversarial harness against the relayer daemon itself | [relayer/](relayer/README.md) |
 | ☑ | A lock so two mutation harnesses cannot restore each other's mutants | [lib/mutation-lock.mjs](lib/mutation-lock.mjs) |
+| ☑ | Runbook for moving the escape hatch to a 2-of-3 Safe, owners verified | [deploy/multisig/](../deploy/multisig/README.md) |
 | ☑ | Differential sweep of the browser port against this one | [parity](https://github.com/Cowl-Protocol/app/blob/main/audits/parity/README.md) |
 | ☑ | Mutation harness proving the notification channel can fail | [monitoring/](monitoring/README.md) |
 

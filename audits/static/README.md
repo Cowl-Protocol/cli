@@ -29,7 +29,7 @@ Test baseline at the same commit, both green before and after this scan:
 |---|---|---|---|
 | 🟢 | Path to deposited funds | — | **Neither tool found one.** Every finding read against source |
 | 🟢 | Regression gate | — | Runs on every push; fails on anything untriaged. Proven to bite — see below |
-| 🟡 | M-01 · verifier-swap escape hatch, owner is a single EOA | Medium | Mitigated — watched by [`../monitoring/`](../monitoring/README.md); scheduling and a multisig still open |
+| 🟡 | M-01 · verifier-swap escape hatch, owner is a single EOA | Medium | Mitigated — watched by [`../monitoring/`](../monitoring/README.md); **migration to a 2-of-3 Safe is prepared and runbooked**, owners generated and verified, not yet executed: [`../../deploy/multisig/`](../../deploy/multisig/README.md) |
 | 🟡 | L-01 · adapter refund `transfer` return unchecked | Low | Fixed in `8b1c58f`, **not deployed** — redeploy deferred; now pinned by failing-first tests on the ERC-20 branch |
 | 🟡 | L-02 · adapter `approve` returns unchecked, 3 sites | Low | Fixed in `8b1c58f`, **not deployed** — fails closed either way, pinned by failing-first tests |
 | 🟡 | I-01 · adapter is a one-way sink | Informational | Acknowledged — holds funds for one transaction by design |
