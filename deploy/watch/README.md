@@ -19,6 +19,12 @@ below is for a human at the VPS.
 | `cowl-watch.timer` | every 15 minutes | only when something is wrong, or when a wrong thing clears |
 | `cowl-watch-heartbeat.timer` | daily, 09:00 | always, so a heartbeat that stops arriving is the signal |
 
+**Both are pinned to mainnet.** Left alone the watcher checks every network that
+has a pool, and the testnet one holds nothing: a flaky testnet RPC or a drained
+testnet float would page somebody for work nobody has to do. An alert channel
+does not die by going quiet, it dies by crying wolf until it stops being read.
+Testnet is checked by hand during governance work, which is when it matters.
+
 The 15-minute cadence is set against the float alarm, not against the swap
 delay: 100 spends left is roughly half an hour of headroom at the busiest rate
 this pool has ever run. A verifier swap sits behind seven days, so the quarter

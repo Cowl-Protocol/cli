@@ -16,7 +16,7 @@ Environment=COWL_WATCH_TMP=/var/lib/cowl-watch/build
 # The same check, with the one difference that it speaks when everything is
 # fine. A quiet channel and a dead timer are the same observation otherwise, and
 # noticing the difference is the entire job of this unit.
-ExecStart=/usr/bin/node scripts/notify.mjs --heartbeat
+ExecStart=/usr/bin/node scripts/notify.mjs --heartbeat --network robinhood-mainnet
 
 TimeoutStartSec=600
 

@@ -27,7 +27,12 @@ Environment=COWL_WATCH_STATE=/var/lib/cowl-watch/state.json
 # this unit runs stays read-only to it.
 Environment=COWL_WATCH_TMP=/var/lib/cowl-watch/build
 
-ExecStart=/usr/bin/node scripts/notify.mjs
+# Mainnet only, deliberately. The watcher checks every network with a pool when
+# told nothing, and the testnet pool holds nothing — a flaky testnet RPC or a
+# drained testnet float would wake somebody for work nobody has to do. That is
+# how an alert channel dies: not by going silent, but by crying wolf until it is
+# no longer read. Testnet is checked by hand during governance work.
+ExecStart=/usr/bin/node scripts/notify.mjs --network robinhood-mainnet
 
 # The notifier has its own deadline and kills the watcher itself; this is the
 # outer bound in case the notifier is what hangs. Wider than the inner one so
