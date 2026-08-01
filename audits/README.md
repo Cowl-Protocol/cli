@@ -12,6 +12,7 @@ shows clean results is not evidence of anything.
 |---|---|---|---|
 | 🟢 | Pool accounting | Six invariants held across 245,760 randomised calls. Turnstile exact to the wei on every token that ever entered, on both live pools | [invariant/](invariant/README.md) · [monitoring/](monitoring/README.md) |
 | 🟢 | Circuit constraints | Every constraint proven load-bearing: 17 deleted one at a time, 17 caught. Public inputs match the pool on all 14 of `spend` and 6 of `shield` | [circuits/](circuits/README.md) |
+| 🟢 | Deployed code is the published code | All three contracts verified on Blockscout; the pool is byte-identical to a build from HEAD, and the adapter's deployed commit is pinned by bytecode comparison | [static/](static/README.md) |
 | 🟢 | Contracts, static | Neither scanner found a path to deposited funds. Every finding triaged against source, and a gate on every push now fails on anything untriaged | [static/](static/README.md) |
 | 🟢 | Test integrity | Three mutation harnesses, so a test or an alarm that stopped constraining anything would show up rather than stay green | [invariant/](invariant/README.md) · [circuits/](circuits/README.md) · [monitoring/](monitoring/README.md) |
 | 🟢 | Continuous integration | 7 jobs in the cli and 3 in the app, green since the first run, every action SHA-pinned. All four mutation harnesses run on every push | [ci/](ci/README.md) |

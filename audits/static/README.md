@@ -128,6 +128,47 @@ That result is less reassuring than it sounds, and the reason is in
 bottom. Every High reported here is a value movement whose safety lives in a
 proof public input — which is precisely the thing neither tool models.
 
+## The deployed bytecode is the published source
+
+**Verified on Blockscout, 2026-08-02.** Before submitting anything, each
+contract's locally built runtime bytecode was compared against what the chain
+actually holds. That comparison is the real result; the explorer badge is just
+where it is now visible.
+
+| Contract | Address | Built from | Match |
+|---|---|---|---|
+| `ShieldedPool` mainnet | `0x6f98666e…6a3E` | **HEAD** | byte-identical, 13,427 B |
+| `ShieldedPool` testnet | `0xf9F825f2…2A59` | **HEAD** | byte-identical, 13,427 B |
+| `CowlTradeAdapter` mainnet | `0x0b86f9d1…3A98` | **`8b1c58f~1`** | identical but for its immutables |
+
+Two things follow, and the second one is the useful one.
+
+**The pool is a reproducible build.** Anyone with this repository and solc
+0.8.35 gets the same 13,427 bytes that sit on mainnet, with no optimizer and no
+special flags. That is a stronger statement than "verified": it means the source
+in this tree is the source that holds the money, checkable without trusting
+Blockscout, GitHub or us.
+
+**The adapter's deployed commit is now pinned exactly.** L-01 and L-02 are fixed
+in this repository and not on chain — recorded here since 2026-07-28 — and the
+comparison turns that from a note into a measurement. HEAD builds to 6,614 bytes;
+the chain holds 6,531; `8b1c58f~1` builds to 6,531 and differs from the chain
+only where the `immutable` pool, router and WETH addresses are baked in at
+construction. The diff lands at offsets 310 and 346 and reads
+`6f98666e9d…6a3E` and `0Bd7D308f8…AD73` — the pool and WETH, exactly.
+
+So the verified source on the explorer is the **pre-fix** adapter, which is what
+is actually running. That is the honest artifact, and it is the one a bounty
+researcher needs: [`../bounty/`](../bounty/README.md) K-2 and K-3 can now name a
+commit rather than a caveat.
+
+Blockscout's public API rate-limits hard from a single address. `forge
+verify-contract` fails at its ABI pre-check long before it submits anything; a
+direct `POST` to `/api/v2/smart-contracts/<addr>/verification/via/standard-input`
+with `files[0]=@std.json;type=application/json` goes through. The explicit
+content type is not optional — without it the endpoint answers
+`JSON files not found`.
+
 ## Findings at a glance
 
 Six findings on record. Severity follows the Impact × Likelihood matrix in

@@ -121,8 +121,8 @@ back, not a payout — and that is only fair if they could read it first.
 | # | Known | Status | Where it is argued |
 |---|---|---|---|
 | K-1 | Verifier swap is the pool's one escape hatch; owner is a single deployer EOA behind a 7-day delay | Mitigated, watched, not yet a multisig | [`../static/`](../static/README.md) M-01 |
-| K-2 | Adapter refund `transfer` return unchecked | Fixed in source, **deployed build predates the fix** | [`../static/`](../static/README.md) L-01 |
-| K-3 | Adapter `approve` returns unchecked, 3 sites | Fixed in source, **not deployed**; fails closed either way | [`../static/`](../static/README.md) L-02 |
+| K-2 | Adapter refund `transfer` return unchecked | Fixed in source; **the deployed build is `8b1c58f~1`, proven by bytecode comparison and verified on the explorer** | [`../static/`](../static/README.md) L-01 |
+| K-3 | Adapter `approve` returns unchecked, 3 sites | Same commit; fails closed either way | [`../static/`](../static/README.md) L-02 |
 | K-4 | Adapter is a one-way sink | Acknowledged, holds funds for one transaction by design | [`../static/`](../static/README.md) I-01 |
 | K-5 | Fee-on-transfer tokens desync their own `pooledValue` | Acknowledged, bounded per token by the turnstile | [`../static/`](../static/README.md) I-02 |
 | K-6 | USDT-shaped tokens cannot shield | Acknowledged, fails closed | [`../static/`](../static/README.md) I-03 |
@@ -133,11 +133,19 @@ back, not a payout — and that is only fair if they could read it first.
 | K-11 | Tokens sent by plain transfer sit at `pooledValue` 0 and are unwithdrawable by anyone | Expected, deliberate | [`../monitoring/`](../monitoring/README.md) |
 
 K-2 and K-3 are the two to watch when the program launches. They are **fixed in
-this repository and not on chain**, so a researcher reading the source sees code
-that differs from the deployed adapter. Either redeploy the adapter before
-launch, or name the deployed bytecode as the in-scope artifact and say the
-source is ahead. Launching without doing one of those invites a valid report
-against a fix that already exists.
+this repository and not on chain**, so a researcher reading `main` sees code that
+differs from the deployed adapter.
+
+**Half of that is now closed.** All three contracts are verified on Blockscout as
+of 2026-08-02, and the adapter was verified from `8b1c58f~1` — the commit that
+actually built the deployed bytecode, established by comparison rather than by
+memory. A researcher reading the explorer therefore sees the real thing, and this
+document can name a commit instead of a caveat.
+
+What is left is the decision, not the ambiguity: **redeploy the adapter, or
+declare the deployed build as the in-scope artifact.** Either is defensible.
+Launching without picking one still invites a valid report against a fix that
+already exists.
 
 ## Platform
 
