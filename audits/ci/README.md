@@ -72,10 +72,52 @@ That is a change to code that signs and spends, made to satisfy a linter that wa
 installed the day before, and it is not a change to make in the same pass that
 installed the linter.
 
-The finding worth a second look is the `refs`/`immutability` cluster: a ref
-assigned during render to mirror a prop is the pattern React's concurrent
-rendering makes unsafe, and three of those sit in the provider that holds the
-shielded keys. Reading them is worth doing; six of them are one line each.
+### The six that were read
+
+The `refs`/`immutability`/`purity` cluster was read rather than counted, because
+a ref assigned during render to mirror state is the pattern React's concurrent
+rendering makes unsafe, and most of them sit in the provider that holds the
+shielded keys.
+
+**`RunProgress.tsx:104` — rebutted.** `Date.now()` is called during render, which
+the rule is right about in the letter. The component drives a 500 ms `tick`
+interval for exactly this reason, so the countdown re-renders and stays
+truthful. Deliberate, compensated, and the compensation is three lines above the
+finding.
+
+**`ShieldedProvider.tsx:335` — acknowledged.** `walletClientRef.current =
+walletClient` during render is the ordinary latest-ref idiom, read only inside
+callbacks at five call sites. Writing it in an effect instead would make it lag
+by a paint, which is worse for what it is for.
+
+**`ShieldedProvider.tsx:405` — the one that is worth acting on.**
+`keysRef.current = keys` is the same idiom, but `keysRef` is not doing the same
+job. It is doing two:
+
+1. a latest-value cache, read by `ensureKeys` so a caller who already has keys is
+   not asked to sign again, and
+2. a **cancellation token** — line 395 drops a late sync result when
+   `keysRef.current !== k`, which is how a read that outlives its deadline is
+   discarded if the account was locked or switched meanwhile.
+
+A latest-ref that is also a cancellation token is fragile in a way a plain one is
+not, because the render-time write can undo a deliberate one. `ensureKeys` sets
+`keysRef.current = k` and then `setKeys(k)`; a render scheduled by any other
+update landing between those two writes runs line 405 with the **old** `keys`,
+putting the ref back to `null`. The symptoms would be a second signature prompt
+for keys the app already holds, or a late sync correction silently dropped with
+`syncStale` left stuck on.
+
+**It is also redundant.** `setKeys` has exactly three callers — lines 341, 444
+and 461 — and each one already writes the ref beside it, at 340, 443 and 460. So
+the render-time write synchronises nothing that is not already synchronised, and
+deleting line 405 removes the only path that can clobber a deliberate write.
+
+That is a one-line change in the component that signs and holds shielded keys,
+so it is recorded here rather than made. **Reachability is unproven**: React 18
+batches the ref write and the state update inside the same async continuation,
+so the window is narrow today. It widens under StrictMode's double render and
+under concurrent features, and the fix costs one deletion.
 
 Nothing here reaches deposited value, and the build is unaffected — Next 16 no
 longer runs ESLint during `next build`, which was confirmed by building with the
