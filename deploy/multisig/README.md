@@ -90,51 +90,173 @@ what it proves is that the destination can **operate** the hatch, not merely
 receive it. An address that can be made owner but cannot sign takes the escape
 hatch with it, permanently, with no way back.
 
-Safe's hosted app supports both chains — verified against
-`safe-config.safe.global`: chain 4663 is listed as *Robinhood Chain* and 46630 as
-*Robinhood Testnet*.
+**Everything below is CLI.** Safe's web app needs a browser wallet, which would
+mean importing one of these keystores into a browser extension — moving the key
+that guards the pool's escape hatch into a far softer target than an encrypted
+file that is only opened to sign. The keys never leave their keystores here.
 
-**A1.** Create the Safe on **46630** with the three owners above and threshold 2.
+The web app can still be used read-only to *view* the Safe once it exists.
 
-**A2.** Verify it before trusting it. Ask for the numbers to be read back from
-the chain, not from the UI:
+Safe 1.4.1 is deployed on both chains — singleton, proxy factory and fallback
+handler all verified present on 46630 and 4663.
 
-```
-cast call <SAFE> "getOwners()(address[])"  --rpc-url <testnet rpc>
-cast call <SAFE> "getThreshold()(uint256)" --rpc-url <testnet rpc>
-```
+### Set these once per shell
 
-Three addresses, matching the table above, and `2`. Anything else stops here.
-
-**A3.** Transfer the testnet pool to it, from the deployer:
-
-```
-cast send 0xf9F825f2D6d8509c78baaa587694f74672C32A59 \
-  "transferOwnership(address)" <SAFE> \
-  --account cowl-deployer --rpc-url <testnet rpc>
-```
-
-**A4.** Confirm the pool now answers with the Safe:
-
-```
-cast call 0xf9F825f2D6d8509c78baaa587694f74672C32A59 "owner()(address)" --rpc-url <testnet rpc>
+```bash
+export RPC=https://46630.rpc.thirdweb.com
+export POOL=0xf9F825f2D6d8509c78baaa587694f74672C32A59
+export FACTORY=0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67
+export SINGLETON=0x41675C099F32341bf84BFc5382aF534df5C7461a
+export HANDLER=0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99
+export ZERO=0x0000000000000000000000000000000000000000
+export K1=~/Vaults/Cowl/sig1/cowl-sig-1
+export K2=~/Vaults/Cowl/sig2/cowl-sig-2
+export K3=~/Vaults/Cowl/sig3/cowl-sig-3
 ```
 
-**A5. The step the rehearsal exists for.** From the Safe, with two signatures,
-propose a verifier swap and then cancel it:
+### A1 — build the Safe's setup call
 
+```bash
+export INIT=$(cast calldata "setup(address[],uint256,address,bytes,address,address,uint256,address)" \
+  "[0x87512e7b03d649372efF6c6db2f575ea6cEC4e91,0x1aa8e8bD2289fdbc745b22CE8320607fBb7168ae,0x1A4464d7A5EfF3b9FCb3cAe9B26227fddF22Ad77]" \
+  2 $ZERO 0x $HANDLER $ZERO 0 $ZERO)
 ```
-proposeVerifierSwap(0, <any non-zero address>)
-cancelVerifierSwap(0)
+
+The `2` is the threshold. Everything after `$HANDLER` is the payment-refund
+mechanism Safe's setup offers and which is not being used: no token, no amount,
+no receiver.
+
+### A2 — find out the address before creating it
+
+`createProxyWithNonce` is CREATE2, so a simulated call returns exactly the
+address a real one would deploy. Look before you leap:
+
+```bash
+cast call $FACTORY "createProxyWithNonce(address,bytes,uint256)(address)" \
+  $SINGLETON $INIT 0 --rpc-url $RPC
 ```
 
-Watch `pendingSwap(0)` go non-zero and back to zero. **This is the proof.** It
-demonstrates the Safe can reach the hatch, that two of three signatures are
-enough, and that a mistaken proposal can be withdrawn — all on a pool holding
-nothing.
+```bash
+export SAFE=<the address that printed>
+```
 
-**A6.** Leave testnet owned by the Safe. It stays the rehearsal ground for every
-future governance action, so nothing is ever attempted first on mainnet.
+### A3 — create it
+
+```bash
+cast send $FACTORY "createProxyWithNonce(address,bytes,uint256)" \
+  $SINGLETON $INIT 0 --keystore $K1 --rpc-url $RPC
+```
+
+### A4 — verify it from the chain, not from a UI
+
+```bash
+cast call $SAFE "getOwners()(address[])"   --rpc-url $RPC
+cast call $SAFE "getThreshold()(uint256)"  --rpc-url $RPC
+cast call $SAFE "VERSION()(string)"        --rpc-url $RPC
+```
+
+Three addresses matching the table above, `2`, and `1.4.1`. Anything else stops
+here.
+
+### A5 — hand the testnet pool over
+
+```bash
+cast send $POOL "transferOwnership(address)" $SAFE \
+  --account cowl-deployer --rpc-url $RPC
+
+cast call $POOL "owner()(address)" --rpc-url $RPC     # must equal $SAFE
+```
+
+### A6 — the rehearsal itself: propose a swap from the Safe
+
+This is the part that proves the Safe can *operate* the hatch. Four steps,
+because a Safe transaction is signed off-chain by owners and submitted by one of
+them.
+
+**Build the inner call and the Safe's own transaction hash:**
+
+```bash
+export DATA=$(cast calldata "proposeVerifierSwap(uint8,address)" 0 0x000000000000000000000000000000000000dEaD)
+export NONCE=$(cast call $SAFE "nonce()(uint256)" --rpc-url $RPC)
+
+export TXHASH=$(cast call $SAFE \
+  "getTransactionHash(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,uint256)(bytes32)" \
+  $POOL 0 $DATA 0 0 0 0 $ZERO $ZERO $NONCE --rpc-url $RPC)
+```
+
+**Sign that hash with two owners.** `--no-hash` is essential: Safe expects a
+signature over the transaction hash itself, not over an
+`\x19Ethereum Signed Message` wrapping of it.
+
+```bash
+export S2=$(cast wallet sign --no-hash $TXHASH --keystore $K2)
+export S1=$(cast wallet sign --no-hash $TXHASH --keystore $K1)
+```
+
+**Concatenate them in ascending owner-address order.** Safe rejects
+out-of-order signatures, and the order is by address, not by who signed first:
+
+| order | owner | address |
+|---|---|---|
+| 1st | sig3 | `0x1A4464d7…Ad77` |
+| 2nd | sig2 | `0x1aa8e8bD…68ae` |
+| 3rd | sig1 | `0x87512e7b…4e91` |
+
+With sig2 and sig1, that means **sig2 first**:
+
+```bash
+export SIGS=0x${S2#0x}${S1#0x}
+```
+
+**Submit it.** Any owner can, and only this one pays gas:
+
+```bash
+cast send $SAFE \
+  "execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)" \
+  $POOL 0 $DATA 0 0 0 0 $ZERO $ZERO $SIGS \
+  --keystore $K1 --rpc-url $RPC
+```
+
+**Confirm the pool saw it:**
+
+```bash
+cast call $POOL "pendingSwap(uint8)(address,uint64)" 0 --rpc-url $RPC
+```
+
+A non-zero verifier and an `executeAfter` roughly seven days out.
+
+### A7 — cancel it, which is the other half of the proof
+
+Same four steps with a different inner call. **Re-read the nonce** — it advanced
+when A6 executed, and a stale nonce produces a hash nobody will accept:
+
+```bash
+export DATA=$(cast calldata "cancelVerifierSwap(uint8)" 0)
+export NONCE=$(cast call $SAFE "nonce()(uint256)" --rpc-url $RPC)
+export TXHASH=$(cast call $SAFE \
+  "getTransactionHash(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,uint256)(bytes32)" \
+  $POOL 0 $DATA 0 0 0 0 $ZERO $ZERO $NONCE --rpc-url $RPC)
+
+export S2=$(cast wallet sign --no-hash $TXHASH --keystore $K2)
+export S1=$(cast wallet sign --no-hash $TXHASH --keystore $K1)
+export SIGS=0x${S2#0x}${S1#0x}
+
+cast send $SAFE \
+  "execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)" \
+  $POOL 0 $DATA 0 0 0 0 $ZERO $ZERO $SIGS \
+  --keystore $K1 --rpc-url $RPC
+
+cast call $POOL "pendingSwap(uint8)(address,uint64)" 0 --rpc-url $RPC
+```
+
+Back to the zero address and `0`. **That round trip is the rehearsal.** It shows
+two of three signatures move the hatch, that the Safe reaches the pool, and that
+a mistaken proposal can be withdrawn — all on a pool holding nothing.
+
+### A8 — leave testnet owned by the Safe
+
+It stays the rehearsal ground, so no governance action is ever attempted on
+mainnet first.
 
 ## Phase B — mainnet
 
