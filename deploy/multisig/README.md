@@ -1,14 +1,36 @@
 # Moving pool ownership to a multisig
 
-Closes the open half of **M-01** — the pool's escape hatch is held by a single
-deployer EOA. See [`../../audits/static/README.md`](../../audits/static/README.md)
+**Done, 2026-08-02.** Both pools are owned by a 2-of-3 Safe at
+`0x708c36A9A54FfbFd16130eF0D9F7F581b90054f3` — testnet in the rehearsal, mainnet in
+`0xff7a9f94c03010b3f320cc1357fd2405cf67463380095f73a50786d5c87f627f`. This file
+is kept as the record of how, and as the runbook for the next time an owner set
+changes.
+
+It closed **M-01** — the pool's escape hatch was held by a single deployer EOA. See [`../../audits/static/README.md`](../../audits/static/README.md)
 for the finding and [`../../audits/monitoring/README.md`](../../audits/monitoring/README.md)
 for what to do when it fires.
 
-**Every transaction here is signed by the owner of the keys. Nothing in this
-file is executed for you.** The verification steps are the parts to run before
-and after each transaction, and they are the reason this is a document rather
-than a script.
+**Every transaction here was signed by the owner of the keys.** The verification
+steps are the parts run before and after each one, and they are the reason this
+is a document rather than a script.
+
+### What it took, in the order it happened
+
+| | Step | Result |
+|---|---|---|
+| A1–A4 | Safe on testnet, read back from the chain | 3 owners, threshold 2, v1.4.1 |
+| A5 | testnet pool handed over | deployer released |
+| A6–A7 | Safe proposes a verifier swap, then cancels it | both walks proven, watcher alarmed at 168.0h |
+| B1 | Safe on mainnet | **same address as testnet** — CREATE2 makes it deterministic |
+| B1.5 | Safe executes a no-op against itself | signing path proven **before** it was trusted |
+| B2 | mainnet pool handed over | deployer released |
+| C | baseline re-recorded, both networks | watcher back to `All clear` |
+
+**B1.5 is the step worth keeping.** The mainnet Safe had never executed anything;
+what was proven on testnet was a different contract instance on a different
+chain. `transferOwnership` has no undo, so an address that can receive the hatch
+but cannot sign takes it away permanently. Making it move once, for nothing, cost
+0.000002 ETH and removed the last unknown.
 
 ## What is actually being changed
 
@@ -45,8 +67,8 @@ are known to be the same thing.
 
 ### Threshold: 2 of 3
 
-**Written as 2-of-3.** If you want 3-of-3, say so before Phase A — but read this
-first.
+**Deployed as 2-of-3.** The reasoning, kept because it applies to every future
+owner-set change:
 
 3-of-3 looks stricter and is a trap. Losing **any one** key makes the escape
 hatch unreachable forever, which is the same end state as `renounceOwnership`,

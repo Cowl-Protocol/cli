@@ -366,17 +366,26 @@ forged proof valid, and `ExceedsPooledValue` then caps the damage at all of
 nothing shortens it, so the alert is the start of a fixed window, not an
 emergency.
 
-1. **Was it you?** The owner key is a single deployer EOA. If the proposal was
-   not deliberate, treat the key as compromised.
-2. Try `cancelVerifierSwap`. **Expect it to be gone.** `transferOwnership` has
-   no delay — it is a single instant call — so whoever holds a stolen key can
-   take ownership in the same breath as proposing the swap, and a competent one
-   will. The cancel lever is worth one attempt and no planning: assume from the
-   first minute that the response is evacuation, not cancellation.
-3. If the key is gone, the 7 days belong to the depositors. Stop the relayers,
-   put a notice on the app, and tell people to withdraw. Withdrawal does not
-   need the relayer or our infrastructure; the CLI can spend self-paid against
-   the pool directly.
+**Since 2026-08-02 the owner is a 2-of-3 Safe** at `0x708c36A9A54FfbFd16130eF0D9F7F581b90054f3`, so a proposal that
+was not deliberate means **two** of the three keys signed it. That changes the
+first question and improves the odds on the second.
+
+1. **Did two of you sign it?** If not, two of three keys are compromised, and the
+   third is the one to protect — do not use it on the machine you suspect.
+2. **Cancel it.** This is now worth planning for rather than attempting once. An
+   attacker with two keys can take ownership away from you with a third
+   signature they do not have, so unlike the single-EOA case, the cancel lever
+   is probably still yours. `cancelVerifierSwap(kind)` through the Safe, exactly
+   as rehearsed: [`../../deploy/multisig/`](../../deploy/multisig/README.md)
+   step A7 is the same call on testnet, run twice already.
+3. **If cancelling fails, the 7 days belong to the depositors.** Stop the
+   relayers, put a notice on the app, and tell people to withdraw. Withdrawal
+   needs neither the relayer nor any of our infrastructure; the CLI spends
+   self-paid straight against the pool.
+4. Whatever happens, **do not rotate a Safe owner while a swap is pending**
+   unless the replacement key has already been proven able to sign. Ownership
+   moves are instant and final, and an unusable owner in a 2-of-3 turns a bad day
+   into a permanent one.
 
 ### `TURNSTILE SHORT`
 
@@ -425,8 +434,17 @@ and the availability of the gasless path.
 ### `owner CHANGED`
 
 Ownership moved. If it was not you, every other check in the run is
-untrustworthy, because whoever holds the key can propose a swap at will. Same
+untrustworthy, because whoever holds it can propose a swap at will. Same
 response as an undeliberate pending swap, minus the option to cancel.
+
+**The expected value is now the Safe** — `0x708c36A9A54FfbFd16130eF0D9F7F581b90054f3` — on both pools. A change *away*
+from it means two of three keys acted. A change *to* something else entirely
+means the same thing and is worse.
+
+This alarm fired for real on 2026-08-02, on mainnet, when ownership moved to the
+Safe deliberately. It arrived on the phone within fifteen minutes and read
+correctly. That was the first end-to-end delivery of a mainnet alarm, and it
+happened by doing the thing rather than by simulating it.
 
 **This alarm and `VERIFIER SWAP PENDING` will usually arrive together**, and the
 order tells you nothing useful — `transferOwnership` is instant and unqueued, so

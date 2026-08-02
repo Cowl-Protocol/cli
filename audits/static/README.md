@@ -385,7 +385,7 @@ figure is what matters and is not in the report:
 `executeVerifierSwap` installs a verifier that accepts anything. `ExceedsPooledValue`
 then caps a drain at all of `pooledValue`, which is everything. **The 7-day
 window is the entire defence, and nothing currently watches
-`VerifierSwapProposed`.** Owner is a single deployer EOA.
+`VerifierSwapProposed`.** Owner was a single deployer EOA when this was written.
 
 **Both halves are closed as of 2026-08-02.** A watcher runs every 15 minutes from
 the VPS and tells a person, and **ownership of both pools now sits with a 2-of-3
