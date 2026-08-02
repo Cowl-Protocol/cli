@@ -29,6 +29,9 @@ const ADDR = {
   quoter: "0x33e885eD0Ec9bF04EcfB19341582aADCb4c8A9E7",
   router: "0xCaf681a66D020601342297493863E78C959E5cb2",
   adapter: "0x0b86f9d1D2E0Abc8ab7C7BE39498855E8F4a3A98",
+  // An adapter this network used to run. A relayer keeps accepting it so
+  // clients mid-upgrade still relay; anything outside the set is refused.
+  adapterOld: "0xD0D74be38C0B99EBa6465e9F512c3F78EE2d1f3B",
 };
 export const TOKEN = "0x1111111111111111111111111111111111111111";
 
@@ -205,6 +208,7 @@ export async function withRelayer(fn) {
         quoter: ADDR.quoter,
         swapRouter: ADDR.router,
         tradeAdapter: ADDR.adapter,
+        tradeAdapterLegacy: [ADDR.adapterOld],
         feeTier: 500,
       },
     };
@@ -283,6 +287,26 @@ export async function withRelayer(fn) {
       /** The default shape: a proven-looking spend paying `fee` in `token`. */
       relaySpend: (fee, token = TOKEN) =>
         api.relay({ spend: spend(fee, token), ciphertexts: ["0xaa", "0xbb"], proof: "0xcc" }),
+      /** A trade whose unshield leg pays `recipient`. Everything past the
+       *  adapter check is nonsense on purpose: what is under test is which
+       *  addresses the relayer is willing to pay at all. */
+      relayTrade: (recipient, fee = 1) =>
+        request("/trade", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            spend: { ...spend(fee), recipient: BigInt(recipient).toString() },
+            ciphertexts: ["0xaa", "0xbb"],
+            spendProof: "0xcc",
+            tokenOut: "0",
+            amountOut: "1",
+            poolFee: 500,
+            shieldCommitment: "0x" + "06".repeat(32),
+            shieldNewRoot: "0x" + "07".repeat(32),
+            shieldCiphertext: "0xdd",
+            shieldProof: "0xee",
+          }),
+        }),
     };
 
     try {

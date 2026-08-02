@@ -11,6 +11,22 @@ export type CowlContracts = {
   /** The atomic private-trade adapter (unshield → swap → re-shield). */
   tradeAdapter?: `0x${string}`;
   /**
+   * Adapters this network used to deploy, still accepted by a relayer.
+   *
+   * Clients build a trade against `tradeAdapter` and nothing else. A relayer
+   * has to be more forgiving, because the two sides upgrade at different
+   * times: the moment a new adapter ships, every client that has not updated
+   * is still paying the old one, and a relayer that knows only the new address
+   * refuses all of them. The reverse bites just as hard — that is exactly how
+   * the 2026-08-02 rollout failed its first test.
+   *
+   * This is an allowlist in source, never anything a caller can influence, and
+   * every entry is an adapter this project deployed and verified. Accepting one
+   * is no weaker than the day it was the current adapter. Prune an address once
+   * no client can still be building against it.
+   */
+  tradeAdapterLegacy?: readonly `0x${string}`[];
+  /**
    * The venue's V3 fee tier for WETH↔USDG routing and gas-in-token quotes.
    * Defaults to 3000 (the testnet venue's fixed pool); mainnet's deepest
    * WETH/USDG pool sits at the 500 (0.05%) tier.
@@ -99,7 +115,10 @@ export const NETWORKS: Record<string, NetworkDef> = {
       usdg: "0xa82762eDA1AF5Ed19B9BD544C121dbcF365526aC",
       swapRouter: "0xbd610c3A708C483a64dC2C92876C2D1a8Ef43b03",
       quoter: "0x5cD1F037A2CB277A7661Ad6c045803BFC428f84B",
-      tradeAdapter: "0xD0D74be38C0B99EBa6465e9F512c3F78EE2d1f3B",
+      tradeAdapter: "0xD7839eC2AbBCcADf77995Af633510b1A3Cdc0726",
+      // Deployed 2026-07-23, superseded 2026-08-02 by the build carrying the
+      // L-01/L-02 fixes. Kept so clients mid-upgrade still relay.
+      tradeAdapterLegacy: ["0xD0D74be38C0B99EBa6465e9F512c3F78EE2d1f3B"],
     },
   },
   "robinhood-mainnet": {

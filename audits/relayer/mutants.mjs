@@ -27,6 +27,22 @@ const ATTACK = join(HERE, "attack.mjs");
 
 const MUTANTS = [
   {
+    name: "adapter-any",
+    file: SERVER,
+    caughtBy: "adapter-unknown",
+    removes: "the refusal to pay an address this network never deployed",
+    find: `          if (!accepted.has(t.spend.recipient)) throw new Error("Trade spend does not pay the adapter.");`,
+    replace: `          void accepted;`,
+  },
+  {
+    name: "adapter-current-only",
+    file: SERVER,
+    caughtBy: "adapter-legacy",
+    removes: "the tolerance that lets clients mid-upgrade keep relaying",
+    find: `            [adapter, ...(net.contracts.tradeAdapterLegacy ?? [])].map((a) => BigInt(a)),`,
+    replace: `            [adapter].map((a) => BigInt(a)),`,
+  },
+  {
     name: "tier-spread",
     file: SERVER,
     caughtBy: "tier-spread",

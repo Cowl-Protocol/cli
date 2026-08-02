@@ -45,6 +45,7 @@ Gasless has been the default door on every spend surface in both clients since
 | 🟢 | It never has two transactions in flight from one account | **was racy, now serialized** — R-04 |
 | 🟢 | It does not hand its own infrastructure to a caller | **leaked the endpoint, now stripped** — R-05 |
 | 🟢 | A wire field cannot be arbitrarily wide | **was unbounded, now 78 digits** — R-06 |
+| 🟢 | An adapter upgrade does not cut off clients mid-migration | **was a hard cutover, now an allowlist** — R-07 |
 | 🟢 | Every case can fail | 8 defences deleted one at a time, 8 caught |
 | 🟡 | R-01's close is a bound, not a proof | with no honest pool answering there is nothing to disagree with. The residual is written out below |
 | 🟡 | The fee floor can still be griefed into refusal | an attacker who can move a price can make a token unquotable, which costs the relayer nothing and drops that token to self-paid |
@@ -117,10 +118,64 @@ something is refused, so all of them would pass against a relayer that refused
 everything — including one that was simply broken. `control` requires an honest
 quote to be answered and an honest spend paying that quote to be carried.
 
+## R-07 — one adapter address is a hard cutover
+
+**Found by shipping, not by reading.** A new trade adapter was deployed to
+testnet carrying the L-01/L-02 fixes, the CLI was pointed at it, and the first
+real trade came back:
+
+```
+✗ Trade spend does not pay the adapter.
+```
+
+Nothing was wrong with the new adapter. The **relayer** refused it, at
+`server.ts:491`, because it compared the spend's recipient against exactly one
+address — the adapter its own installed build knew about, which was still the
+old one.
+
+That check is right to exist. A relayer that submits a spend paying any address
+a caller names is a machine for funding transfers to strangers out of somebody
+else's shielded balance. What was wrong is that it admitted exactly one answer.
+
+**Both directions fail closed, which is the part that makes it a real problem:**
+
+| | |
+|---|---|
+| relayer old, client new | refused — this is what happened |
+| relayer new, client old | refused — every user who has not upgraded |
+
+Clients and relayers do not update in the same minute. npm publishes, users
+upgrade when they feel like it, and a relayer is a systemd unit somebody has to
+restart. With a single address there is no ordering that avoids an outage: ship
+the relayer first and you break everyone who has not updated; ship the clients
+first and the relayer refuses them all.
+
+**Fixed** by matching against a set — the current adapter plus
+`tradeAdapterLegacy`, every entry an address this project deployed and verified.
+The set is read from `src/networks.ts` and never from the request, so it widens
+what a relayer will pay by exactly the adapters we chose and by nothing else.
+Accepting a previous adapter is no weaker than the day it was the current one.
+
+Two cases pin it, and both are in CI:
+
+| Case | Holds |
+|---|---|
+| `adapter-unknown` | a trade paying `0x…dEaD` is refused, and refused **for the adapter** rather than incidentally |
+| `adapter-legacy` | a trade paying the previous adapter gets past the adapter check — it still fails later on its nonsense fee, which is the point |
+
+And two mutants prove the cases bite: `adapter-any` deletes the check entirely,
+`adapter-current-only` narrows the set back to one address. Both caught.
+
+**The residual is housekeeping.** A legacy entry widens the set forever unless
+somebody removes it. Prune an address once no client can still be building
+against it — which in practice means once the npm version that carried it is old
+enough that nobody runs it.
+
 ## Findings
 
 | ID | Severity | Status | What |
 |---|---|---|---|
+| R-07 | **Low** | **Fixed** | A trade's unshield leg was checked against exactly one adapter address, so the day a new adapter shipped, every client still building against the old one was refused — and the reverse for anyone who upgraded early. Found by doing it: the 2026-08-02 rollout failed its first live trade |
 | R-01 | **Medium** | **Fixed** | The fee floor was a spot AMM quote with no bound, and the cheapest of four tiers won. One dust pool at an unused tier set the fee for every spend in that token |
 | R-02 | **Low** | **Fixed** | An endpoint failure in the window after a spend was answered took the whole daemon down, and every spend queued behind it |
 | R-03 | **Low** | **Fixed** | An anonymous request bought up to six upstream RPC calls, uncapped and unauthenticated. The queue bounded transactions, not work |

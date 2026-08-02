@@ -486,9 +486,17 @@ export function startRelayServer(
           // The unshield leg must pay the adapter (not us, not anyone else),
           // and its fee leg must pay this relayer a trade's worth of gas in
           // the spend's own token.
+          // Every adapter this network has deployed, current first. A single
+          // address here breaks gasless trading for everyone on the wrong side
+          // of an adapter upgrade — clients and relayers do not update in the
+          // same minute, and both directions fail closed. The set is read from
+          // source and never from the request.
           const adapter = net.contracts.tradeAdapter;
           if (!adapter) throw new Error("This relayer's network has no trade adapter.");
-          if (t.spend.recipient !== BigInt(adapter)) throw new Error("Trade spend does not pay the adapter.");
+          const accepted = new Set(
+            [adapter, ...(net.contracts.tradeAdapterLegacy ?? [])].map((a) => BigInt(a)),
+          );
+          if (!accepted.has(t.spend.recipient)) throw new Error("Trade spend does not pay the adapter.");
           if (t.spend.relayer !== BigInt(account.address)) throw new Error("Spend does not pay this relayer.");
           if (t.spend.token > (1n << 160n) - 1n) throw new Error("Bad token in spend.");
           // Before pricing, for the reason given on the same check in /relay.

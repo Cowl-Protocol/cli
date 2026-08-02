@@ -52,6 +52,39 @@ const CASES = {
     ok("control", `honest quote ${q.fee}, spend carried`);
   },
 
+  // ------------------------------------------------------- adapter-unknown ---
+  // A trade's unshield leg names who the pool pays. If a relayer will submit
+  // one paying any address, it becomes a machine for funding transfers to
+  // strangers out of somebody else's shielded balance. The set of addresses it
+  // will pay has to come from source, never from the request.
+  async "adapter-unknown"(r) {
+    const res = await r.relayTrade("0x000000000000000000000000000000000000dEaD");
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 200) return fail("adapter-unknown", "a trade paying 0x…dEaD was carried");
+    if (!/adapter/i.test(body.error ?? "")) {
+      return fail("adapter-unknown", `refused ${res.status}, but not for the adapter: ${body.error}`);
+    }
+    ok("adapter-unknown", `refused ${res.status}: ${body.error}`);
+  },
+
+  // ------------------------------------------------------- adapter-legacy ---
+  // The other direction, and the one that bit on 2026-08-02. Clients and
+  // relayers do not upgrade in the same minute, so an adapter the network used
+  // to run must keep working — otherwise shipping a new adapter breaks gasless
+  // trading for everyone who has not updated, and rolling back breaks it for
+  // everyone who has.
+  //
+  // This trade is refused too, further down, because its proof is nonsense.
+  // What it must NOT be refused for is the adapter.
+  async "adapter-legacy"(r) {
+    const res = await r.relayTrade("0xD0D74be38C0B99EBa6465e9F512c3F78EE2d1f3B");
+    const body = await res.json().catch(() => ({}));
+    if (/does not pay the adapter/i.test(body.error ?? "")) {
+      return fail("adapter-legacy", "the previous adapter was refused — an upgrade would cut off every client mid-migration");
+    }
+    ok("adapter-legacy", `previous adapter accepted past the check (then ${res.status}: ${(body.error ?? "").slice(0, 40)})`);
+  },
+
   // ----------------------------------------------------------- tier-spread ---
   // Anyone can create a pool at a fee tier that has none and seed it with a
   // dust position at a price of their choosing. The daemon scans all four tiers
