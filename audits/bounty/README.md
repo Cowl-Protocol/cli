@@ -63,7 +63,7 @@ A report against an unnamed commit cannot be traced to a fix, which is the rule
 | Asset | Where | At |
 |---|---|---|
 | `ShieldedPool.sol` | mainnet `0x6f98666e9d05431dCd765AAa289a5E346AfA6a3E` · testnet `0xf9F825f2D6d8509c78baaa587694f74672C32A59` | deployed, immutable |
-| `CowlTradeAdapter.sol` | mainnet `0x0b86f9d1D2E0Abc8ab7C7BE39498855E8F4a3A98` · testnet `0xD0D74be38C0B99EBa6465e9F512c3F78EE2d1f3B` | **deployed build predates L-01/L-02** — see known issues |
+| `CowlTradeAdapter.sol` | mainnet `0x0b86f9d1D2E0Abc8ab7C7BE39498855E8F4a3A98` · testnet `0xD0D74be38C0B99EBa6465e9F512c3F78EE2d1f3B` | **the deployed build is the artifact, not `main`** — commit `8b1c58f~1`, verified on the explorer |
 | Shield verifier | mainnet `0x0D6E2e89…065fC` · testnet `0xB75c5659…0ba9` | generated, on chain |
 | Transfer verifier | mainnet `0x18670646…1275E` · testnet `0xBA945Bf3…4239` | generated, on chain |
 | Noir circuits | `circuits/{notes,shield,transfer}` | the commit the program names |
@@ -132,20 +132,29 @@ back, not a payout — and that is only fair if they could read it first.
 | K-10 | An attacker who can move a price can make a token unquotable | Residual named — costs the relayer nothing, drops that token to self-paid | [`../relayer/`](../relayer/README.md) |
 | K-11 | Tokens sent by plain transfer sit at `pooledValue` 0 and are unwithdrawable by anyone | Expected, deliberate | [`../monitoring/`](../monitoring/README.md) |
 
-K-2 and K-3 are the two to watch when the program launches. They are **fixed in
-this repository and not on chain**, so a researcher reading `main` sees code that
-differs from the deployed adapter.
+K-2 and K-3 used to be the two to watch at launch, because a researcher reading
+`main` would see code that differs from the deployed adapter and could burn a
+weekend on a fix that already exists.
 
-**Half of that is now closed.** All three contracts are verified on Blockscout as
-of 2026-08-02, and the adapter was verified from `8b1c58f~1` — the commit that
-actually built the deployed bytecode, established by comparison rather than by
-memory. A researcher reading the explorer therefore sees the real thing, and this
-document can name a commit instead of a caveat.
+**Both halves are closed as of 2026-08-02.**
 
-What is left is the decision, not the ambiguity: **redeploy the adapter, or
-declare the deployed build as the in-scope artifact.** Either is defensible.
-Launching without picking one still invites a valid report against a fix that
-already exists.
+*The ambiguity.* All three contracts are verified on Blockscout, and the adapter
+was verified from `8b1c58f~1` — the commit that actually built the deployed
+bytecode, established by comparison rather than by memory. A researcher reading
+the explorer sees the real thing.
+
+*The decision.* **The deployed build is the in-scope artifact; the adapter is not
+being redeployed for these two.** Neither reaches anyone's principal: L-01 strands
+the trader's own unspent surplus after their trade has already settled, and only
+for a token that returns `false` instead of reverting; L-02 fails closed. A
+redeploy is a release — new deploy, new CLI publish, new app ship, and old clients
+routing through the old adapter until they upgrade — and that is the wrong price
+for an edge case that reaches nobody's money. The reasoning in full is in
+[`../static/`](../static/README.md).
+
+So a report against L-01 or L-02 gets this document back rather than a payout,
+and the researcher could read that before spending a weekend on it — which is the
+whole point of publishing known issues.
 
 ## Platform
 
@@ -178,8 +187,9 @@ tree it links to, and the numbers above.
 Each of these is a thing to do, not a thing to decide, except where marked.
 
 - [ ] **Decide** the vault size, the critical percentage and cap, and the floor
-- [ ] Redeploy the trade adapter, or name the deployed bytecode as in scope and
-      say the source is ahead — K-2 and K-3
+- [x] ~~Redeploy the trade adapter, or name the deployed bytecode as in scope~~ —
+      **done 2026-08-02**: deployed build declared in scope, commit `8b1c58f~1`
+      pinned by bytecode comparison and verified on the explorer
 - [ ] Name the exact commit in every repository the program covers
 - [ ] Publish this file's scope and known-issues tables on the platform, verbatim
 - [ ] Point [`../../SECURITY.md`](../../SECURITY.md) at the program, replacing

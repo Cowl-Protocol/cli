@@ -25,7 +25,7 @@ shows clean results is not evidence of anything.
 | 🟢 | App and CLI code | CodeQL `security-extended` read on both repositories: 4 findings, 1 fixed, 3 rebutted with reasoning. Nothing in proving, note handling, key derivation or the wire format | [codeql/](codeql/README.md) |
 | 🟢 | Governance | Pool is not a proxy and cannot be edited. Its one lever — a 7-day timelocked verifier swap — is held by a **2-of-3 Safe** since 2026-08-02, on both pools. One stolen key reaches nothing, and cannot renounce the hatch either | [static/](static/README.md) · [deploy/multisig/](../deploy/multisig/README.md) |
 | 🟡 | Paid disclosure | Scope, severity mapping, known issues and platform are written and ready to launch; no vault is funded and the three numbers are undecided | [bounty/](bounty/README.md) |
-| 🟡 | Trade adapter | L-01 and L-02 are fixed in source and now both pinned by tests that fail without them, including the ERC-20 input leg that had none; the deployed adapter still predates the fixes because a redeploy was deliberately deferred | [static/](static/README.md) |
+| 🟡 | Trade adapter | L-01 and L-02 fixed in source, pinned by tests that fail without them, and **deliberately not deployed — decided, not pending**. Neither reaches anyone's principal; a redeploy is a release, not a transaction, and the ambiguity it used to cause is closed now that the running commit is pinned and verified. They ride the next redeploy that earns itself | [static/](static/README.md) |
 | 🟡 | Circuit residuals | Two properties the circuits do not carry alone. Both are held by the pool or need a token that does not exist. Closing either costs a timelocked verifier swap | [circuits/](circuits/README.md) |
 | 🟡 | Relayer fee pricing | The fee a relayer demands in an ERC-20 comes from a venue quote, and a bound on how far the tiers may disagree is not a proof that any of them is honest. An attacker can now deny a token, never underpay for one | [relayer/](relayer/README.md) |
 
@@ -204,9 +204,10 @@ after. **A bounty here is not buying a patch.** The pool is immutable, so a
 finding in `ShieldedPool.sol` cannot be fixed in place — the reward is priced
 against the difference between hearing it from a researcher and hearing it from a
 drained pool, which is all of `pooledValue`. And **the adapter's deployed
-bytecode predates the L-01/L-02 fixes**, so launching without either redeploying
-it or naming the deployed build as the in-scope artifact invites a valid report
-against a fix that already exists.
+bytecode predates the L-01/L-02 fixes** — which is now settled rather than open:
+the deployed build is declared the in-scope artifact, its commit pinned by
+bytecode comparison and verified on the explorer, and the fixes ride the next
+redeploy that earns one on its own merits.
 
 ### Phase 5 — formal verification
 

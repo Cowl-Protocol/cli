@@ -36,10 +36,39 @@ Test baseline at the same commit, both green before and after this scan:
 | 🟡 | I-02 · fee-on-transfer tokens desync their own `pooledValue` | Informational | Acknowledged — bounded per token by the turnstile |
 | 🟡 | I-03 · USDT-shaped tokens cannot shield | Informational | Acknowledged — fails closed |
 
-**Why L-01 and L-02 are 🟡 and not 🟢.** They are fixed in this repository and the
-deployed adapter predates the fixes, deliberately. Nothing on chain carries them
-yet, so the source and the running contract differ, and this table says so rather
-than letting a green tick imply otherwise. They ride the next adapter redeploy.
+**Why L-01 and L-02 are 🟡 and not 🟢, and why that is now a decision rather than
+a delay.** They are fixed in this repository; the deployed adapter predates the
+fixes. Nothing on chain carries them, so the source and the running contract
+differ, and this table says so rather than letting a green tick imply otherwise.
+
+**Decided 2026-08-02: no redeploy for these two.** The deployed build is declared
+the in-scope artifact, and the fixes ride the next release that earns one on its
+own merits.
+
+The reasoning is a comparison of what each side costs.
+
+*What a redeploy buys.* L-01 strands the trader's **own unspent surplus** in the
+adapter, after their trade has already settled correctly, and only for a token
+that returns `false` instead of reverting. No user principal, no pool balance,
+nobody else's money. L-02 fails closed — the trade reverts and nothing is at
+risk.
+
+*What a redeploy costs.* It is not a transaction, it is a release: deploy, change
+`tradeAdapter` in `src/networks.ts`, publish the CLI, ship the app — and every
+user who has not upgraded keeps routing through the old adapter regardless. A
+release carries its own risk, and spending it on an edge case that reaches
+nobody's principal is the wrong trade.
+
+*What the delay used to cost, and no longer does.* The real problem was never the
+bug, it was the **ambiguity**: a researcher reading `main` saw code that differs
+from what runs. That is closed. The deployed commit is pinned to `8b1c58f~1` by
+bytecode comparison and the running source is verified on the explorer, so the
+gap is now a documented fact rather than an unknown.
+
+Reversal condition, so this does not quietly become permanent: **the next time
+the adapter is redeployed for any reason, these fixes go with it.** They are
+already in `main` and already pinned by tests that fail without them, so that
+costs nothing to honour.
 
 ## The gate — `check.mjs`
 
@@ -178,8 +207,8 @@ do not carry into this table unverified.
 | ID | Finding | Severity | Status |
 |---|---|---|---|
 | [M-01] | Verifier-swap escape hatch had no watcher; owner is a single EOA | Medium | **Mitigated** — state watcher + recorded baseline ([`../monitoring/`](../monitoring/README.md)); scheduled runs and a multisig still open |
-| [L-01] | Adapter refund `transfer` return value unchecked | Low | **Fixed in `8b1c58f`** — redeploy deferred; ERC-20 branch covered since 2026-08-01, both mutations caught |
-| [L-02] | Adapter `approve` return values unchecked, 3 sites | Low | **Fixed in `8b1c58f`** — redeploy deferred; pinned by failing-first tests |
+| [L-01] | Adapter refund `transfer` return value unchecked | Low | **Fixed in `8b1c58f`, and deliberately not deployed** — decided 2026-08-02; ERC-20 branch covered since 2026-08-01, both mutations caught |
+| [L-02] | Adapter `approve` return values unchecked, 3 sites | Low | **Fixed in `8b1c58f`, and deliberately not deployed** — fails closed either way; pinned by failing-first tests |
 | [I-01] | Adapter is a one-way sink: open `receive()`, no sweep | Informational | **Acknowledged** — holds funds for one transaction by design |
 | [I-02] | A fee-on-transfer or rebasing token desyncs its own `pooledValue` | Informational | **Acknowledged** — per-token turnstile bounds the damage; a client-side warning is the fix |
 | [I-03] | Tokens returning no value (USDT-shaped) cannot shield at all | Informational | **Acknowledged** — fails closed |
@@ -191,9 +220,10 @@ commit `1cbb48a`. The deployed adapter predates both — see the note below.
 
 > **Fixed in source, not on chain.** All three lived in `CowlTradeAdapter.sol`,
 > which is deployed immutable at `0x0b86f9d1D2E0Abc8ab7C7BE39498855E8F4a3A98` on
-> mainnet. The source now carries the fixes; **the deployed adapter does not, and
-> was deliberately left alone** — the testnet venue is still in use for the trade
-> work, and a redeploy in the middle of that buys nothing. Finding 1 was also
+> mainnet, built from `8b1c58f~1` and verified there. The source now carries the
+> fixes; **the deployed adapter does not, and that is a decision as of
+> 2026-08-02** rather than an open item — the argument is above the findings
+> table. Finding 1 was also
 > never reachable with the tokens tradeable today: it fires only on a token that
 > returns `false` instead of reverting, and the adapter can only route assets
 > with a venue pool — WETH, the real USDG, COWL — all standard.
