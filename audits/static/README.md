@@ -30,7 +30,7 @@ Test baseline at the same commit, both green before and after this scan:
 | 🟢 | Path to deposited funds | — | **Neither tool found one.** Every finding read against source |
 | 🟢 | Regression gate | — | Runs on every push; fails on anything untriaged. Proven to bite — see below |
 | 🟢 | M-01 · verifier-swap escape hatch | Medium | **Closed 2026-08-02.** Both pools are owned by a 2-of-3 Safe at `0x708c36A9A54FfbFd16130eF0D9F7F581b90054f3`; one stolen key no longer reaches the hatch, nor can it renounce. Watched every 15 minutes: [`../../deploy/multisig/`](../../deploy/multisig/README.md) |
-| 🟡 | L-01 · adapter refund `transfer` return unchecked | Low | **Fixed and deployed 2026-08-02** — new adapter `0x55B0fD7EB8a9c8F54CF52b57961412FDc53fbB7D` on mainnet, `0xD7839eC2AbBCcADf77995Af633510b1A3Cdc0726` on testnet, both verified. Not yet reachable: the published CLI still points at the old one |
+| 🟡 | L-01 · adapter refund `transfer` return unchecked | Low | **Fixed and deployed 2026-08-02** — new adapter `0x55B0fD7EB8a9c8F54CF52b57961412FDc53fbB7D` on mainnet, `0xD7839eC2AbBCcADf77995Af633510b1A3Cdc0726` on testnet, both verified. Live for CLI users in 0.6.15; the app still ships the old address until it is deployed |
 | 🟡 | L-02 · adapter `approve` returns unchecked, 3 sites | Low | **Fixed and deployed 2026-08-02** in the same adapter; fails closed either way |
 | 🟡 | I-01 · adapter is a one-way sink | Informational | Acknowledged — holds funds for one transaction by design |
 | 🟡 | I-02 · fee-on-transfer tokens desync their own `pooledValue` | Informational | Acknowledged — bounded per token by the turnstile |
@@ -65,9 +65,14 @@ by the contract. Both directions of that failure cut off users mid-upgrade. That
 is a defect neither audit nor verification would have surfaced, and only doing
 the thing revealed it.
 
-The row stays 🟡 until the rollout completes: the fix is on chain but the
-published CLI still points at the old adapter, so nothing has changed for a user
-yet.
+**Rollout, 2026-08-02.** `@cowlprotocol/cli@0.6.15` published with both new
+addresses and the R-07 fix; both relayers upgraded and restarted; and a gasless
+private trade run through the new adapter end to end — the same command that had
+been refused an hour earlier, this time submitted by the relayer with the user's
+wallet nowhere in the transaction.
+
+The row stays 🟡 for one leg only: **the browser client still ships the old
+address** until the app is deployed. CLI users are on the fix.
 
 The reasoning is a comparison of what each side costs.
 

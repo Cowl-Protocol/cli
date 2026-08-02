@@ -166,6 +166,13 @@ Two cases pin it, and both are in CI:
 And two mutants prove the cases bite: `adapter-any` deletes the check entirely,
 `adapter-current-only` narrows the set back to one address. Both caught.
 
+**Proven in production the same day.** Both relayers were upgraded to 0.6.15 and
+restarted, and the trade that had been refused an hour earlier went through —
+0.1 USDG received, 8,988,423 gas, submitted by `0xEAd4E3Ee…27A0` with the user's
+wallet absent from the transaction entirely. Testnet was proven before the
+mainnet relayer was touched, so a fault in the fix could not have taken gasless
+down on the chain that holds money.
+
 **The residual is housekeeping.** A legacy entry widens the set forever unless
 somebody removes it. Prune an address once no client can still be building
 against it — which in practice means once the npm version that carried it is old
