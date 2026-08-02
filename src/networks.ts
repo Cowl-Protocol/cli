@@ -160,7 +160,10 @@ export const NETWORKS: Record<string, NetworkDef> = {
       usdg: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
       swapRouter: "0xCaf681a66D020601342297493863E78C959E5cb2",
       quoter: "0x33e885eD0Ec9bF04EcfB19341582aADCb4c8A9E7",
-      tradeAdapter: "0x0b86f9d1D2E0Abc8ab7C7BE39498855E8F4a3A98",
+      tradeAdapter: "0x55B0fD7EB8a9c8F54CF52b57961412FDc53fbB7D",
+      // Deployed 2026-07-24, superseded 2026-08-02 by the build carrying the
+      // L-01/L-02 fixes. Kept so clients mid-upgrade still relay — see R-07.
+      tradeAdapterLegacy: ["0x0b86f9d1D2E0Abc8ab7C7BE39498855E8F4a3A98"],
       feeTier: 500,
     },
   },

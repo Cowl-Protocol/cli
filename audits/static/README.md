@@ -30,8 +30,8 @@ Test baseline at the same commit, both green before and after this scan:
 | 🟢 | Path to deposited funds | — | **Neither tool found one.** Every finding read against source |
 | 🟢 | Regression gate | — | Runs on every push; fails on anything untriaged. Proven to bite — see below |
 | 🟢 | M-01 · verifier-swap escape hatch | Medium | **Closed 2026-08-02.** Both pools are owned by a 2-of-3 Safe at `0x708c36A9A54FfbFd16130eF0D9F7F581b90054f3`; one stolen key no longer reaches the hatch, nor can it renounce. Watched every 15 minutes: [`../../deploy/multisig/`](../../deploy/multisig/README.md) |
-| 🟡 | L-01 · adapter refund `transfer` return unchecked | Low | Fixed in `8b1c58f`, **not deployed** — the running build is `8b1c58f~1`, proven by bytecode comparison and verified on the explorer; pinned by failing-first tests on the ERC-20 branch |
-| 🟡 | L-02 · adapter `approve` returns unchecked, 3 sites | Low | Same commit on chain; fails closed either way, pinned by failing-first tests |
+| 🟡 | L-01 · adapter refund `transfer` return unchecked | Low | **Fixed and deployed 2026-08-02** — new adapter `0x55B0fD7EB8a9c8F54CF52b57961412FDc53fbB7D` on mainnet, `0xD7839eC2AbBCcADf77995Af633510b1A3Cdc0726` on testnet, both verified. Not yet reachable: the published CLI still points at the old one |
+| 🟡 | L-02 · adapter `approve` returns unchecked, 3 sites | Low | **Fixed and deployed 2026-08-02** in the same adapter; fails closed either way |
 | 🟡 | I-01 · adapter is a one-way sink | Informational | Acknowledged — holds funds for one transaction by design |
 | 🟡 | I-02 · fee-on-transfer tokens desync their own `pooledValue` | Informational | Acknowledged — bounded per token by the turnstile |
 | 🟡 | I-03 · USDT-shaped tokens cannot shield | Informational | Acknowledged — fails closed |
@@ -41,9 +41,33 @@ a delay.** They are fixed in this repository; the deployed adapter predates the
 fixes. Nothing on chain carries them, so the source and the running contract
 differ, and this table says so rather than letting a green tick imply otherwise.
 
-**Decided 2026-08-02: no redeploy for these two.** The deployed build is declared
-the in-scope artifact, and the fixes ride the next release that earns one on its
-own merits.
+**Decided 2026-08-02, then reversed the same day — and the reversal is the more
+interesting half.** The first decision was to declare the deployed build in scope
+and let the fixes ride the next release, on the argument that neither finding
+reaches anyone's principal. That reasoning still stands on its own terms and is
+kept below.
+
+What overrode it was a standing position rather than a new fact: **a bug gets
+fixed however small it is.** The owner's call, and the right one to defer to —
+the cost side of the argument was a judgement about release effort, not about
+safety, and the person carrying that effort is entitled to spend it.
+
+**Deployed.** New adapter `0x55B0fD7EB8a9c8F54CF52b57961412FDc53fbB7D` on mainnet and
+`0xD7839eC2AbBCcADf77995Af633510b1A3Cdc0726` on testnet, both verified, both proven by
+comparison against a local build. A real private trade ran through the testnet
+one before mainnet was touched — 0.1 USDG received, 8.7M gas, nothing left
+stranded in the adapter.
+
+**And the redeploy found something the reasoning below had missed entirely:**
+[R-07](../relayer/README.md). A relayer accepted exactly one adapter address, so
+the first trade through the new one was refused — by our own infrastructure, not
+by the contract. Both directions of that failure cut off users mid-upgrade. That
+is a defect neither audit nor verification would have surfaced, and only doing
+the thing revealed it.
+
+The row stays 🟡 until the rollout completes: the fix is on chain but the
+published CLI still points at the old adapter, so nothing has changed for a user
+yet.
 
 The reasoning is a comparison of what each side costs.
 
