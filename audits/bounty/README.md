@@ -120,7 +120,7 @@ back, not a payout — and that is only fair if they could read it first.
 
 | # | Known | Status | Where it is argued |
 |---|---|---|---|
-| K-1 | Verifier swap is the pool's one escape hatch; owner is a single deployer EOA behind a 7-day delay | Mitigated, watched, not yet a multisig | [`../static/`](../static/README.md) M-01 |
+| K-1 | Verifier swap is the pool's one escape hatch, behind a 7-day delay | **Closed** — held by a 2-of-3 Safe since 2026-08-02, watched every 15 minutes. Residual: compromise of two of three keys | [`../static/`](../static/README.md) M-01 |
 | K-2 | Adapter refund `transfer` return unchecked | Fixed in source; **the deployed build is `8b1c58f~1`, proven by bytecode comparison and verified on the explorer** | [`../static/`](../static/README.md) L-01 |
 | K-3 | Adapter `approve` returns unchecked, 3 sites | Same commit; fails closed either way | [`../static/`](../static/README.md) L-02 |
 | K-4 | Adapter is a one-way sink | Acknowledged, holds funds for one transaction by design | [`../static/`](../static/README.md) I-01 |

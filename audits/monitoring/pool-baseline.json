@@ -1,7 +1,7 @@
 {
   "robinhood-mainnet": {
     "pool": "0x6f98666e9d05431dCd765AAa289a5E346AfA6a3E",
-    "owner": "0xd5F69BCf5969f827981296bA1c417cA2456b2eff",
+    "owner": "0x708c36A9A54FfbFd16130eF0D9F7F581b90054f3",
     "shieldVerifier": "0x0D6E2e89586Cf457e831cdC33C209195C6a065fC",
     "transferVerifier": "0x186706467d0Dbe19374236deD89eE7E58991275E",
     "tokens": [

@@ -12,7 +12,7 @@ piece of infrastructure the whole gasless path depends on.
 | | Check | Last read 2026-07-31 |
 |---|---|---|
 | 🟢 | Turnstile exact, every token that entered through `shield()` | exact to the wei, both pools |
-| 🟢 | Pool owner unchanged | matches the recorded baseline |
+| 🟢 | Pool owner unchanged | matches the recorded baseline — a **2-of-3 Safe** on both pools since 2026-08-02 |
 | 🟢 | Both verifier addresses unchanged | match the recorded baseline |
 | 🟢 | No verifier swap pending, either kind | none |
 | 🟢 | Relayer answers, and serves this chain and this pool | both networks |

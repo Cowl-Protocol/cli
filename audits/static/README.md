@@ -29,7 +29,7 @@ Test baseline at the same commit, both green before and after this scan:
 |---|---|---|---|
 | 🟢 | Path to deposited funds | — | **Neither tool found one.** Every finding read against source |
 | 🟢 | Regression gate | — | Runs on every push; fails on anything untriaged. Proven to bite — see below |
-| 🟡 | M-01 · verifier-swap escape hatch, owner is a single EOA | Medium | Mitigated — watched by [`../monitoring/`](../monitoring/README.md); **migration to a 2-of-3 Safe is prepared and runbooked**, owners generated and verified, not yet executed: [`../../deploy/multisig/`](../../deploy/multisig/README.md) |
+| 🟢 | M-01 · verifier-swap escape hatch | Medium | **Closed 2026-08-02.** Both pools are owned by a 2-of-3 Safe at `0x708c36A9A54FfbFd16130eF0D9F7F581b90054f3`; one stolen key no longer reaches the hatch, nor can it renounce. Watched every 15 minutes: [`../../deploy/multisig/`](../../deploy/multisig/README.md) |
 | 🟡 | L-01 · adapter refund `transfer` return unchecked | Low | Fixed in `8b1c58f`, **not deployed** — the running build is `8b1c58f~1`, proven by bytecode comparison and verified on the explorer; pinned by failing-first tests on the ERC-20 branch |
 | 🟡 | L-02 · adapter `approve` returns unchecked, 3 sites | Low | Same commit on chain; fails closed either way, pinned by failing-first tests |
 | 🟡 | I-01 · adapter is a one-way sink | Informational | Acknowledged — holds funds for one transaction by design |
@@ -387,11 +387,19 @@ then caps a drain at all of `pooledValue`, which is everything. **The 7-day
 window is the entire defence, and nothing currently watches
 `VerifierSwapProposed`.** Owner is a single deployer EOA.
 
-**Both halves have moved since.** A watcher runs every 15 minutes from the VPS
-and notifies a person, and the move to a 2-of-3 Safe is rehearsed end to end on
-testnet — where the pool is already owned by one — and runbooked for mainnet at
-[`../../deploy/multisig/`](../../deploy/multisig/README.md). Mainnet ownership
-has not moved yet.
+**Both halves are closed as of 2026-08-02.** A watcher runs every 15 minutes from
+the VPS and tells a person, and **ownership of both pools now sits with a 2-of-3
+Safe** at `0x708c36A9A54FfbFd16130eF0D9F7F581b90054f3` — mainnet in
+`0xff7a9f94…f627f`, testnet the day before.
+
+The single deployer EOA no longer reaches the hatch. It cannot propose a swap, it
+cannot execute one, and — the part that is easy to miss — **it cannot renounce**,
+which was a one-transaction way to destroy the escape hatch outright with no
+delay to notice it in.
+
+What the delay still guards is a compromise of two of the three keys. That is the
+residual, and it is why the 7-day window and the watcher both still matter.
+Runbook and rehearsal: [`../../deploy/multisig/`](../../deploy/multisig/README.md).
 
 Renouncing is not the answer while the verifier is unaudited — it would freeze
 an unaudited verifier permanently. The two things that shrink this are a
