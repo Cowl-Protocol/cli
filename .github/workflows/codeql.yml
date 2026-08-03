@@ -37,10 +37,10 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: github/codeql-action/init@4187e74d05793876e9989daffde9c3e66b4acd07 # v3
+      - uses: github/codeql-action/init@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v3
         with:
           languages: javascript-typescript
           # The wider suite on purpose. This repository holds the keystore paths
@@ -49,4 +49,4 @@ jobs:
           # decision to make with output in hand rather than a guess now.
           queries: security-extended
       # No build step. JavaScript and TypeScript are analysed from source.
-      - uses: github/codeql-action/analyze@4187e74d05793876e9989daffde9c3e66b4acd07 # v3
+      - uses: github/codeql-action/analyze@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v3
